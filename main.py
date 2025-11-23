@@ -9,8 +9,7 @@ from core.middleware import ActivityTrackingMiddleware
 from db import Base, engine
 from core.config import settings
 from core.logging import logger
-from api.ws.tick_manager import tick_manager
-from models.session import GameSession  # noqa: F401
+
 from models.user import User  # noqa: F401
 from models.tournament import Tournament  # noqa: F401
 from models.tournament_participant import TournamentParticipant  # noqa: F401
@@ -19,9 +18,6 @@ from models.tournament_game import TournamentGame  # noqa: F401
 from models.game_participant import GameParticipant  # noqa: F401
 
 # ROUTES
-from api.routers.session import router as session_router
-from api.routers.ws import router as ws_router
-from api.routers.topics import router as topics_router
 from api.routers.auth import router as auth_router
 from api.routers.tournaments import router as tournaments_router
 from api.routers.users import router as users_router
@@ -80,14 +76,10 @@ async def startup_event():
         logger.warning(f"Migration warning (may be already applied): {e}")
     
     logger.info("Database tables created")
-    
-    logger.info("Starting tick manager...")
-    asyncio.create_task(tick_manager.start())
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    logger.info("Shutting down tick manager...")
-    tick_manager.stop()
+    logger.info("Shutting down application...")
 
 
 app.include_router(auth_router, tags=["Authentication"])
@@ -97,12 +89,5 @@ app.include_router(games_router)
 app.include_router(stats_router)
 app.include_router(admin_router)
 app.include_router(premium_router)
-app.include_router(session_router, tags=["Session"])
-app.include_router(ws_router, tags=["WS"])
-app.include_router(topics_router)
 
 
-@app.get("/")
-def root():
-    logger.info("Health check requested")
-    return {"message": "OK", "status": "healthy"}

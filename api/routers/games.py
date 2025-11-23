@@ -15,10 +15,52 @@ from schemas.tournament import TournamentGameWithParticipants, GameParticipant
 from core.auth import get_current_active_user
 from core.validators import validate_tournament_exists, validate_tournament_creator
 from core.exceptions import TournamentException
+from core.roles import UserRole
 from models.user import User
 from models.tournament_game import GameStatus
+from models.tournament_participant import TournamentParticipant
 
 router = APIRouter(prefix="/games", tags=["Games"])
+
+
+def can_submit_game_results(db: Session, game_id: int, tournament_id: int, user: User) -> bool:
+    """
+    Перевірка чи користувач може встановлювати результати гри.
+    Дозволено:
+    - Учасникам цієї гри
+    - Створювачу турніру
+    - Адмінам та супер-адмінам
+    """
+    print(f"🔒 Checking permissions for user {user.id} (role: {user.role}) for game {game_id}")
+    
+    # Адміни та супер-адміни можуть все
+    if user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+        print(f"✅ User is {user.role} - access granted")
+        return True
+    
+    # Перевірити чи користувач - створювач турніру
+    from models.tournament import Tournament
+    tournament = db.query(Tournament).filter_by(id=tournament_id).first()
+    if tournament:
+        print(f"🏆 Tournament creator: {tournament.creator_id}, Current user: {user.id}")
+        if tournament.creator_id == user.id:
+            print("✅ User is tournament creator - access granted")
+            return True
+    
+    # Перевірити чи користувач - учасник цієї гри
+    game_participants = get_game_participants(db, game_id)
+    print(f"👥 Game has {len(game_participants)} participants")
+    
+    for gp in game_participants:
+        participant = db.query(TournamentParticipant).filter_by(id=gp.participant_id).first()
+        if participant:
+            print(f"   - Participant {gp.participant_id}: user_id={participant.user_id}")
+            if participant.user_id == user.id:
+                print("✅ User is game participant - access granted")
+                return True
+    
+    print("❌ Access denied - user is not participant, creator, or admin")
+    return False
 
 
 @router.get("/{game_id}", response_model=TournamentGameWithParticipants)
@@ -57,9 +99,14 @@ async def submit_game_results(
         if not game:
             raise HTTPException(status_code=404, detail="Game not found")
         
-        # Validate tournament creator
+        # Validate tournament and check permissions
         tournament = validate_tournament_exists(db, game.tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "submit game results")
+        
+        if not can_submit_game_results(db, game_id, tournament.id, current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to submit results for this game"
+            )
         
         # Get current game participants
         game_participants = get_game_participants(db, game_id)
@@ -176,9 +223,14 @@ async def submit_participant_result(
         if not game:
             raise HTTPException(status_code=404, detail="Game not found")
         
-        # Validate tournament creator
+        # Validate tournament and check permissions
         tournament = validate_tournament_exists(db, game.tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "submit participant result")
+        
+        if not can_submit_game_results(db, game_id, tournament.id, current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to submit results for this game"
+            )
         
         # Check if game is completed
         if game.status == GameStatus.COMPLETED:
@@ -320,7 +372,13 @@ async def submit_participant_position(
             raise HTTPException(status_code=404, detail="Game not found")
         
         tournament = validate_tournament_exists(db, game.tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "submit participant position")
+        
+        # Перевірка прав доступу
+        if not can_submit_game_results(db, game_id, tournament.id, current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to submit results for this game. Only game participants, tournament creator, or admins can submit results."
+            )
         
         game_participants = get_game_participants(db, game_id)
         game_participant = next(
@@ -336,6 +394,14 @@ async def submit_participant_position(
         game_participant.calculated_points = calculated_points
         game_participant.points = int(calculated_points)
         
+        print(f"💾 Setting points for participant {participant_id}: calculated={calculated_points}, points={int(calculated_points)}")
+        
+        # Mark as modified to ensure SQLAlchemy tracks the change
+        from sqlalchemy.orm import attributes
+        attributes.flag_modified(game_participant, "positions")
+        attributes.flag_modified(game_participant, "calculated_points")
+        attributes.flag_modified(game_participant, "points")
+        
         # Check if all participants have positions
         all_have_positions = all(
             gp.positions is not None for gp in get_game_participants(db, game_id)
@@ -347,6 +413,9 @@ async def submit_participant_position(
         
         # Commit changes first before recalculating total score
         db.commit()
+        db.refresh(game_participant)
+        
+        print(f"✅ After commit - participant {participant_id}: points={game_participant.points}, calculated={game_participant.calculated_points}")
         
         # Now recalculate total score after commit
         update_participant_total_score(db, participant_id)

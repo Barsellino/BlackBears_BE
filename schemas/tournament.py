@@ -176,8 +176,13 @@ class GameParticipant(GameParticipantBase):
     participant_id: int
     
     # User info
+    user_id: Optional[int] = None
     battletag: Optional[str] = None
     name: Optional[str] = None
+    
+    # Additional fields for positions
+    positions: Optional[str] = None
+    calculated_points: Optional[float] = None
 
     class Config:
         from_attributes = True

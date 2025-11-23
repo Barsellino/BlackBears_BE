@@ -72,7 +72,11 @@ class SwissStrategy(TournamentStrategy):
     def can_create_next_round(self, db: Session, tournament: Tournament) -> bool:
         """Check if all games in current round are completed"""
         
+        print(f"🔍 Checking if can create next round for tournament {tournament.id}")
+        print(f"   Current round: {tournament.current_round}/{tournament.total_rounds}")
+        
         if tournament.current_round >= tournament.total_rounds:
+            print(f"   ❌ Already at max rounds")
             return False  # Tournament is finished
         
         # Get current round
@@ -82,22 +86,38 @@ class SwissStrategy(TournamentStrategy):
         ).first()
         
         if not current_round:
+            print(f"   ❌ Current round not found")
             return False
+        
+        print(f"   Round {current_round.round_number} status: {current_round.status}")
         
         # Check if all games in current round are completed
         games = db.query(TournamentGame).filter(
             TournamentGame.round_id == current_round.id
         ).all()
+        
+        print(f"   Found {len(games)} games in round")
+        
         for game in games:
+            print(f"   Game {game.id}: status={game.status}")
             if game.status != GameStatus.COMPLETED:
+                print(f"      ❌ Game {game.id} not completed")
                 return False
             
-            # Check if all participants have results
+            # Check if all participants have results (check calculated_points or points)
             game_participants = get_game_participants(db, game.id)
+            print(f"      {len(game_participants)} participants")
             for gp in game_participants:
-                if gp.points is None:
+                # Accept either points or calculated_points
+                has_result = gp.points is not None or gp.calculated_points is not None
+                if not has_result:
+                    print(f"         ❌ Participant {gp.participant_id} has no results")
                     return False
+                else:
+                    points_value = gp.points if gp.points is not None else gp.calculated_points
+                    print(f"         ✅ Participant {gp.participant_id}: {points_value} points")
         
+        print(f"   ✅ All games completed, can create next round")
         return True
     
     def create_next_round(self, db: Session, tournament: Tournament) -> TournamentRound:

@@ -356,9 +356,10 @@ async def get_tournament_leaderboard_endpoint(
 async def get_round_games(
     tournament_id: int,
     round_number: int,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Get all games for a specific round"""
+    """Get all games for a specific round (user's game first if participating)"""
     from api.crud.game_crud import get_round_games
     from models.tournament_round import TournamentRound
     
@@ -376,4 +377,23 @@ async def get_round_games(
         raise HTTPException(status_code=404, detail="Round not found")
     
     games = get_round_games(db, round_obj.id)
-    return games
+    
+    # Sort games: user's game first, then others
+    user_game = None
+    other_games = []
+    
+    for game in games:
+        is_user_game = any(
+            gp.user_id == current_user.id 
+            for gp in game.participants
+        )
+        if is_user_game:
+            user_game = game
+        else:
+            other_games.append(game)
+    
+    # Return user's game first, then others
+    if user_game:
+        return [user_game] + other_games
+    else:
+        return games

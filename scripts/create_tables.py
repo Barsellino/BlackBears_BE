@@ -10,7 +10,6 @@ from models.tournament_participant import TournamentParticipant
 from models.tournament_round import TournamentRound
 from models.tournament_game import TournamentGame
 from models.game_participant import GameParticipant
-from models.session import GameSession
 
 print("Створення таблиць...")
 print(f"Моделі для створення: {[table.name for table in Base.metadata.sorted_tables]}")

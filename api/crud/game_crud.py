@@ -15,7 +15,24 @@ def create_tournament_game(db: Session, game_data: TournamentGameCreate):
 
 
 def get_tournament_game(db: Session, game_id: int):
-    return db.query(TournamentGame).filter(TournamentGame.id == game_id).first()
+    from sqlalchemy.orm import joinedload
+    from models.user import User
+    
+    game = db.query(TournamentGame).options(
+        joinedload(TournamentGame.participants)
+        .joinedload(GameParticipant.participant)
+        .joinedload(TournamentParticipant.user)
+    ).filter(TournamentGame.id == game_id).first()
+    
+    # Add user info to game participants
+    if game:
+        for game_participant in game.participants:
+            user = game_participant.participant.user
+            game_participant.user_id = user.id
+            game_participant.battletag = user.battletag
+            game_participant.name = user.name
+    
+    return game
 
 
 def get_round_games(db: Session, round_id: int):
@@ -37,6 +54,7 @@ def get_round_games(db: Session, round_id: int):
         game.round_number = game.round.round_number
         for game_participant in game.participants:
             user = game_participant.participant.user
+            game_participant.user_id = user.id
             game_participant.battletag = user.battletag
             game_participant.name = user.name
     
