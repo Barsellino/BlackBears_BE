@@ -1,0 +1,43 @@
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Enum
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+from db import Base
+import enum
+
+
+class TournamentStatus(enum.Enum):
+    REGISTRATION = "registration"
+    ACTIVE = "active"
+    FINISHED = "finished"
+    CANCELLED = "cancelled"
+
+
+class Tournament(Base):
+    __tablename__ = "tournaments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    creator_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Tournament settings
+    tournament_type = Column(String, default="SWISS")  # SWISS, ELIMINATION, etc
+    total_participants = Column(Integer, nullable=False)  # Must be divisible by 8
+    total_rounds = Column(Integer, nullable=False)
+    current_round = Column(Integer, default=0)
+    
+    # Status and timing
+    status = Column(Enum(TournamentStatus), default=TournamentStatus.REGISTRATION)
+    registration_deadline = Column(DateTime(timezone=True), nullable=True)
+    start_date = Column(DateTime(timezone=True), nullable=True)
+    end_date = Column(DateTime(timezone=True), nullable=True)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    creator = relationship("User", back_populates="created_tournaments")
+    participants = relationship("TournamentParticipant", back_populates="tournament", cascade="all, delete-orphan")
+    rounds = relationship("TournamentRound", back_populates="tournament", cascade="all, delete-orphan")
+    games = relationship("TournamentGame", back_populates="tournament", cascade="all, delete-orphan")
