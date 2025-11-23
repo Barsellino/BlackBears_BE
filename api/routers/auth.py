@@ -66,7 +66,23 @@ async def auth_callback(code: str, state: str = None, db: Session = Depends(get_
                     db_user = create_user(db, user_create)
                     logger.info(f"Created new user: {user_info.battletag} with BG rating: {bg_rating}")
                 else:
+                    # Оновити дані користувача при логіні
                     logger.info(f"User logged in: {user_info.battletag}")
+                    update_data = UserUpdate(
+                        battlegrounds_rating=bg_rating
+                    )
+                    # Оновити email якщо його немає або він змінився
+                    if user_info.email and (not db_user.email or db_user.email != user_info.email):
+                        logger.info(f"Updating email for user {user_info.battletag}: {user_info.email}")
+                        db_user.email = user_info.email
+                    # Оновити battletag якщо змінився
+                    if db_user.battletag != user_info.battletag:
+                        logger.info(f"Updating battletag: {db_user.battletag} -> {user_info.battletag}")
+                        db_user.battletag = user_info.battletag
+                    # Оновити рейтинг
+                    db_user.battlegrounds_rating = bg_rating
+                    db.commit()
+                    db.refresh(db_user)
                 break
             except Exception as db_error:
                 logger.warning(f"Database attempt {attempt + 1} failed: {str(db_error)}")

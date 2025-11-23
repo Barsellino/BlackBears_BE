@@ -19,7 +19,7 @@ class BattlenetService:
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "response_type": "code",
-            "scope": "openid profile",
+            "scope": "openid profile email",
         }
         if state:
             params["state"] = state
