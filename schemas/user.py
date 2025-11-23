@@ -31,6 +31,8 @@ class UserRead(UserBase):
     id: int
     role: UserRole
     is_active: bool
+    last_seen: Optional[datetime] = None
+    is_online: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
 

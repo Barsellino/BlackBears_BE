@@ -22,8 +22,17 @@ class User(Base):
         nullable=False
     )
     is_active = Column(Boolean, default=True)
+    last_seen = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    @property
+    def is_online(self) -> bool:
+        """Користувач онлайн якщо last_seen < 5 хвилин"""
+        if not self.last_seen:
+            return False
+        from datetime import datetime, timezone, timedelta
+        return datetime.now(timezone.utc) - self.last_seen < timedelta(minutes=5)
     
     # Tournament relationships
     created_tournaments = relationship("Tournament", back_populates="creator")

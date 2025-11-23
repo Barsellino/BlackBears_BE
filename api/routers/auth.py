@@ -29,11 +29,12 @@ async def auth_callback(code: str, state: str = None, db: Session = Depends(get_
         
         # Exchange code for access token
         logger.info("Exchanging code for token...")
-        access_token = await battlenet_service.exchange_code_for_token(code)
-        if not access_token:
+        token_data = await battlenet_service.exchange_code_for_token(code)
+        if not token_data:
             logger.error("Failed to get access token")
             raise HTTPException(status_code=400, detail="Failed to get access token")
         
+        access_token = token_data.get("access_token")
         logger.info(f"Got access token: {access_token[:10]}...")
         
         # Get user info from Battle.net
@@ -68,13 +69,6 @@ async def auth_callback(code: str, state: str = None, db: Session = Depends(get_
                 else:
                     # Оновити дані користувача при логіні
                     logger.info(f"User logged in: {user_info.battletag}")
-                    update_data = UserUpdate(
-                        battlegrounds_rating=bg_rating
-                    )
-                    # Оновити email якщо його немає або він змінився
-                    if user_info.email and (not db_user.email or db_user.email != user_info.email):
-                        logger.info(f"Updating email for user {user_info.battletag}: {user_info.email}")
-                        db_user.email = user_info.email
                     # Оновити battletag якщо змінився
                     if db_user.battletag != user_info.battletag:
                         logger.info(f"Updating battletag: {db_user.battletag} -> {user_info.battletag}")

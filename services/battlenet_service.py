@@ -19,14 +19,14 @@ class BattlenetService:
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "response_type": "code",
-            "scope": "openid profile email",
+            "scope": "openid",
         }
         if state:
             params["state"] = state
         
         return f"{self.auth_url}?{urlencode(params)}"
 
-    async def exchange_code_for_token(self, code: str) -> Optional[str]:
+    async def exchange_code_for_token(self, code: str) -> Optional[dict]:
         async with httpx.AsyncClient() as client:
             data = {
                 "grant_type": "authorization_code",
@@ -44,8 +44,7 @@ class BattlenetService:
             print(f"Token response: {response.text}")
             
             if response.status_code == 200:
-                token_data = response.json()
-                return token_data.get("access_token")
+                return response.json()
             return None
 
     async def get_user_info(self, access_token: str) -> Optional[BattlenetUserInfo]:
@@ -58,7 +57,7 @@ class BattlenetService:
                 return BattlenetUserInfo(
                     id=str(user_data.get("id")),
                     battletag=user_data.get("battletag", ""),
-                    email=user_data.get("email")
+                    email=None  # Battle.net не надає email через OAuth
                 )
             return None
 

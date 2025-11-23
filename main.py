@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from core.exceptions import TournamentException
+from core.middleware import ActivityTrackingMiddleware
 
 from db import Base, engine
 from core.config import settings
@@ -31,6 +32,9 @@ from api.routers.premium import router as premium_router
 
 
 app = FastAPI(title="Game API", version="1.0.0")
+
+# Activity tracking middleware (має бути перед CORS)
+app.add_middleware(ActivityTrackingMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,6 +65,20 @@ async def value_error_handler(request: Request, exc: ValueError):
 async def startup_event():
     logger.info("Starting up application...")
     Base.metadata.create_all(bind=engine)
+    
+    # Автоматична міграція: додати last_seen якщо немає
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                ALTER TABLE users 
+                ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP WITH TIME ZONE;
+            """))
+            conn.commit()
+            logger.info("Migration: last_seen column added/verified")
+    except Exception as e:
+        logger.warning(f"Migration warning (may be already applied): {e}")
+    
     logger.info("Database tables created")
     
     logger.info("Starting tick manager...")

@@ -87,6 +87,8 @@ async def get_all_users(
                 "battlegrounds_rating": user.battlegrounds_rating,
                 "role": user.role,
                 "is_active": user.is_active,
+                "last_seen": user.last_seen,
+                "is_online": user.is_online,
                 "created_at": user.created_at,
                 "updated_at": user.updated_at
             }

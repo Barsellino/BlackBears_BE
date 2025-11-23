@@ -20,6 +20,7 @@ class UserCreate(UserBase):
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
+    email: Optional[str] = None
     battlegrounds_rating: Optional[int] = None
 
 
@@ -28,6 +29,8 @@ class User(UserBase):
     battlenet_id: str
     role: UserRole
     is_active: bool
+    last_seen: Optional[datetime] = None
+    is_online: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
 
