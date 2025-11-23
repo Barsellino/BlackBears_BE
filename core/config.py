@@ -21,7 +21,7 @@ class Settings:
         # Battle.net OAuth
         self.battlenet_client_id: str = os.getenv("BATTLENET_CLIENT_ID", "")
         self.battlenet_client_secret: str = os.getenv("BATTLENET_CLIENT_SECRET", "")
-        self.battlenet_redirect_uri: str = "http://localhost:8000/auth/callback"
+        self.battlenet_redirect_uri: str = os.getenv("BATTLENET_REDIRECT_URI", "http://localhost:8000/auth/callback")
         self.battlenet_auth_url: str = "https://oauth.battle.net/authorize"
         self.battlenet_token_url: str = "https://oauth.battle.net/token"
         self.battlenet_user_info_url: str = "https://oauth.battle.net/userinfo"
