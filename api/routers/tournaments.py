@@ -339,19 +339,6 @@ async def get_tournament_status_endpoint(
     return manager.get_tournament_status(db)
 
 
-@router.get("/{tournament_id}/leaderboard", response_model=List[TournamentParticipant])
-async def get_tournament_leaderboard_endpoint(
-    tournament_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get tournament leaderboard (sorted by total score)"""
-    tournament = get_tournament(db, tournament_id)
-    if not tournament:
-        raise HTTPException(status_code=404, detail="Tournament not found")
-    
-    return get_tournament_leaderboard(db, tournament_id)
-
-
 @router.get("/{tournament_id}/rounds/{round_number}/games")
 async def get_round_games(
     tournament_id: int,
@@ -378,22 +365,63 @@ async def get_round_games(
     
     games = get_round_games(db, round_obj.id)
     
-    # Sort games: user's game first, then others
+    # Check if all games in current round are completed
+    from models.tournament_game import GameStatus
+    all_games_completed = all(
+        game.status == GameStatus.COMPLETED and all(
+            gp.positions is not None or (gp.points is not None and gp.points > 0)
+            for gp in game.participants
+        )
+        for game in games
+    )
+    
+    # Process games: add can_edit, is_my_game, and sort
+    from models.tournament import TournamentStatus
+    is_tournament_finished = tournament.status == TournamentStatus.FINISHED
+    is_admin = current_user.role.value in ['admin', 'super_admin']
+    is_creator = tournament.creator_id == current_user.id
+    
     user_game = None
     other_games = []
     
     for game in games:
-        is_user_game = any(
-            gp.user_id == current_user.id 
-            for gp in game.participants
+        # Check if user is participant
+        participant_user_ids = [gp.user_id for gp in game.participants]
+        is_my_game = current_user.id in participant_user_ids
+        
+        # Determine if user can edit this game
+        can_edit = (
+            not is_tournament_finished and 
+            (is_admin or is_creator or is_my_game)
         )
-        if is_user_game:
+        
+        # Add computed fields to game
+        game.can_edit = can_edit
+        game.is_my_game = is_my_game
+        
+        # Ensure calculated_points is set for all participants
+        for gp in game.participants:
+            if not hasattr(gp, 'calculated_points') or gp.calculated_points is None:
+                if gp.points is not None:
+                    gp.calculated_points = float(gp.points)
+        
+        # Sort games
+        if is_my_game:
             user_game = game
         else:
             other_games.append(game)
     
-    # Return user's game first, then others
-    if user_game:
-        return [user_game] + other_games
-    else:
-        return games
+    # Prepare sorted games list
+    sorted_games = [user_game] + other_games if user_game else games
+    
+    # Return tournament info with games
+    return {
+        "tournament": {
+            "id": tournament.id,
+            "current_round": tournament.current_round,
+            "total_rounds": tournament.total_rounds,
+            "status": tournament.status.value,
+            "all_games_completed": all_games_completed
+        },
+        "games": sorted_games
+    }

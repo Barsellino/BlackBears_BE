@@ -36,12 +36,7 @@ class BattlenetService:
                 "code": code,
             }
             
-            print(f"Token request data: {data}")
-            print(f"Token URL: {self.token_url}")
-            
             response = await client.post(self.token_url, data=data)
-            print(f"Token response status: {response.status_code}")
-            print(f"Token response: {response.text}")
             
             if response.status_code == 200:
                 return response.json()
@@ -64,17 +59,14 @@ class BattlenetService:
     async def get_battlegrounds_rating(self, access_token: str, account_id: str) -> Optional[int]:
         """Get Hearthstone Battlegrounds rating (mock implementation)"""
         # Note: Real Hearthstone API requires additional setup and may not have current BG ratings
-        # This is a mock implementation that returns a random rating for demo
-        import random
+        # This is a mock implementation that returns a fixed rating
         
         # In real implementation, you would call:
         # https://us.api.blizzard.com/hearthstone/account/{account_id}/collections
         # But this requires hs.collections scope and proper game data API setup
         
-        # For now, return a mock rating between 4000-8000 MMR
-        mock_rating = random.randint(4000, 8000)
-        print(f"Mock Battlegrounds rating for {account_id}: {mock_rating}")
-        return mock_rating
+        # Return fixed mock rating of 5000 MMR
+        return 5000
 
 
 battlenet_service = BattlenetService()

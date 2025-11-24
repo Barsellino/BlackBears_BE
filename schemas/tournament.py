@@ -151,6 +151,10 @@ class TournamentGame(TournamentGameBase):
     
     # Round info
     round_number: Optional[int] = None
+    
+    # Computed fields
+    can_edit: Optional[bool] = None
+    is_my_game: Optional[bool] = None
 
     class Config:
         from_attributes = True

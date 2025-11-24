@@ -25,6 +25,7 @@ def create_tournament(db: Session, tournament: TournamentCreate, creator_id: int
 
 def get_tournament(db: Session, tournament_id: int):
     from sqlalchemy.orm import joinedload
+    from models.tournament import TournamentStatus
     
     tournament = db.query(Tournament).options(
         joinedload(Tournament.participants).joinedload(TournamentParticipant.user)
@@ -35,6 +36,25 @@ def get_tournament(db: Session, tournament_id: int):
         for participant in tournament.participants:
             participant.battletag = participant.user.battletag
             participant.name = participant.user.name
+        
+        # Sort participants based on tournament status
+        if tournament.status == TournamentStatus.FINISHED:
+            # Sort by final_position (ascending) - 1st place first
+            tournament.participants.sort(
+                key=lambda p: (p.final_position is None, p.final_position or 999)
+            )
+        elif tournament.status == TournamentStatus.ACTIVE:
+            # Sort by total_score (descending) - highest score first
+            tournament.participants.sort(
+                key=lambda p: p.total_score or 0, 
+                reverse=True
+            )
+        else:  # REGISTRATION or CANCELLED
+            # Sort by joined_at (ascending) - first joined first
+            tournament.participants.sort(
+                key=lambda p: p.joined_at
+            )
+    
     return tournament
 
 

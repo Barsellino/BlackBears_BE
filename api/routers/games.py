@@ -23,6 +23,16 @@ from models.tournament_participant import TournamentParticipant
 router = APIRouter(prefix="/games", tags=["Games"])
 
 
+def validate_tournament_not_finished(tournament):
+    """Перевірка що турнір не завершений"""
+    from models.tournament import TournamentStatus
+    if tournament.status == TournamentStatus.FINISHED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot modify results - tournament is already finished"
+        )
+
+
 def can_submit_game_results(db: Session, game_id: int, tournament_id: int, user: User) -> bool:
     """
     Перевірка чи користувач може встановлювати результати гри.
@@ -31,35 +41,23 @@ def can_submit_game_results(db: Session, game_id: int, tournament_id: int, user:
     - Створювачу турніру
     - Адмінам та супер-адмінам
     """
-    print(f"🔒 Checking permissions for user {user.id} (role: {user.role}) for game {game_id}")
-    
     # Адміни та супер-адміни можуть все
     if user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
-        print(f"✅ User is {user.role} - access granted")
         return True
     
     # Перевірити чи користувач - створювач турніру
     from models.tournament import Tournament
     tournament = db.query(Tournament).filter_by(id=tournament_id).first()
-    if tournament:
-        print(f"🏆 Tournament creator: {tournament.creator_id}, Current user: {user.id}")
-        if tournament.creator_id == user.id:
-            print("✅ User is tournament creator - access granted")
-            return True
+    if tournament and tournament.creator_id == user.id:
+        return True
     
     # Перевірити чи користувач - учасник цієї гри
     game_participants = get_game_participants(db, game_id)
-    print(f"👥 Game has {len(game_participants)} participants")
-    
     for gp in game_participants:
         participant = db.query(TournamentParticipant).filter_by(id=gp.participant_id).first()
-        if participant:
-            print(f"   - Participant {gp.participant_id}: user_id={participant.user_id}")
-            if participant.user_id == user.id:
-                print("✅ User is game participant - access granted")
-                return True
+        if participant and participant.user_id == user.id:
+            return True
     
-    print("❌ Access denied - user is not participant, creator, or admin")
     return False
 
 
@@ -93,20 +91,22 @@ async def submit_game_results(
     db: Session = Depends(get_db)
 ):
     """Submit results for a game"""
+    # Validate game exists
+    game = get_tournament_game(db, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Validate tournament and check permissions
+    tournament = validate_tournament_exists(db, game.tournament_id)
+    validate_tournament_not_finished(tournament)
+    
+    if not can_submit_game_results(db, game_id, tournament.id, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to submit results for this game"
+        )
+    
     try:
-        # Validate game exists
-        game = get_tournament_game(db, game_id)
-        if not game:
-            raise HTTPException(status_code=404, detail="Game not found")
-        
-        # Validate tournament and check permissions
-        tournament = validate_tournament_exists(db, game.tournament_id)
-        
-        if not can_submit_game_results(db, game_id, tournament.id, current_user):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have permission to submit results for this game"
-            )
         
         # Get current game participants
         game_participants = get_game_participants(db, game_id)
@@ -165,15 +165,17 @@ async def clear_game_results(
     db: Session = Depends(get_db)
 ):
     """Clear all results for a game (only if game not completed)"""
+    # Validate game exists
+    game = get_tournament_game(db, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Validate tournament creator
+    tournament = validate_tournament_exists(db, game.tournament_id)
+    validate_tournament_not_finished(tournament)
+    validate_tournament_creator(tournament, current_user.id, "clear game results")
+    
     try:
-        # Validate game exists
-        game = get_tournament_game(db, game_id)
-        if not game:
-            raise HTTPException(status_code=404, detail="Game not found")
-        
-        # Validate tournament creator
-        tournament = validate_tournament_exists(db, game.tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "clear game results")
         
         # Check if game is completed
         if game.status == GameStatus.COMPLETED:
@@ -217,20 +219,22 @@ async def submit_participant_result(
     db: Session = Depends(get_db)
 ):
     """Submit result for single participant in a game"""
+    # Validate game exists
+    game = get_tournament_game(db, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Validate tournament and check permissions
+    tournament = validate_tournament_exists(db, game.tournament_id)
+    validate_tournament_not_finished(tournament)
+    
+    if not can_submit_game_results(db, game_id, tournament.id, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to submit results for this game"
+        )
+    
     try:
-        # Validate game exists
-        game = get_tournament_game(db, game_id)
-        if not game:
-            raise HTTPException(status_code=404, detail="Game not found")
-        
-        # Validate tournament and check permissions
-        tournament = validate_tournament_exists(db, game.tournament_id)
-        
-        if not can_submit_game_results(db, game_id, tournament.id, current_user):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have permission to submit results for this game"
-            )
         
         # Check if game is completed
         if game.status == GameStatus.COMPLETED:
@@ -297,15 +301,17 @@ async def clear_participant_result(
     db: Session = Depends(get_db)
 ):
     """Clear result for specific participant in a game"""
+    # Validate game exists
+    game = get_tournament_game(db, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Validate tournament creator
+    tournament = validate_tournament_exists(db, game.tournament_id)
+    validate_tournament_not_finished(tournament)
+    validate_tournament_creator(tournament, current_user.id, "clear participant result")
+    
     try:
-        # Validate game exists
-        game = get_tournament_game(db, game_id)
-        if not game:
-            raise HTTPException(status_code=404, detail="Game not found")
-        
-        # Validate tournament creator
-        tournament = validate_tournament_exists(db, game.tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "clear participant result")
         
         # Check if game is completed
         if game.status == GameStatus.COMPLETED:
@@ -340,6 +346,90 @@ async def clear_participant_result(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@router.post("/{game_id}/positions/batch")
+async def submit_positions_batch(
+    game_id: int,
+    updates: List[dict],
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Batch update positions for multiple participants"""
+    import json
+    
+    game = get_tournament_game(db, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    tournament = validate_tournament_exists(db, game.tournament_id)
+    validate_tournament_not_finished(tournament)
+    
+    if not can_submit_game_results(db, game_id, tournament.id, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to submit results for this game"
+        )
+    
+    try:
+        updated_count = 0
+        
+        for update in updates:
+            participant_id = update.get("participant_id")
+            positions = update.get("positions", update.get("position", []))
+            
+            if not participant_id or not positions:
+                continue
+            
+            # Find game participant
+            game_participants = get_game_participants(db, game_id)
+            game_participant = next(
+                (gp for gp in game_participants if gp.participant_id == participant_id), None
+            )
+            
+            if not game_participant:
+                continue
+            
+            # Calculate and update
+            calculated_points = calculate_points_from_positions(positions)
+            game_participant.positions = json.dumps(sorted(positions))
+            game_participant.calculated_points = calculated_points
+            game_participant.points = int(calculated_points)
+            
+            from sqlalchemy.orm import attributes
+            attributes.flag_modified(game_participant, "positions")
+            attributes.flag_modified(game_participant, "calculated_points")
+            attributes.flag_modified(game_participant, "points")
+            
+            updated_count += 1
+        
+        # Check if all participants have positions
+        all_have_positions = all(
+            gp.positions is not None for gp in get_game_participants(db, game_id)
+        )
+        
+        if all_have_positions:
+            game.status = GameStatus.COMPLETED
+            game.finished_at = func.now()
+        
+        db.commit()
+        
+        # Update total scores for all updated participants
+        for update in updates:
+            participant_id = update.get("participant_id")
+            if participant_id:
+                update_participant_total_score(db, participant_id)
+        
+        return {
+            "message": f"Updated {updated_count} participants",
+            "game_id": game_id,
+            "game_completed": all_have_positions
+        }
+        
+    except TournamentException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 @router.put("/{game_id}/participant/{participant_id}/position")
 async def submit_participant_position(
     game_id: int,
@@ -349,29 +439,31 @@ async def submit_participant_position(
     db: Session = Depends(get_db)
 ):
     """Submit position for single participant (can be shared positions)"""
+    import json
+    
+    # Validate positions
+    if not positions or len(positions) > 8:
+        raise HTTPException(status_code=400, detail="Positions must be 1-8 items")
+    
+    for pos in positions:
+        if not (1 <= pos <= 8):
+            raise HTTPException(status_code=400, detail="All positions must be between 1-8")
+    
+    # Check consecutive if multiple positions
+    if len(positions) > 1:
+        sorted_pos = sorted(positions)
+        for i in range(1, len(sorted_pos)):
+            if sorted_pos[i] != sorted_pos[i-1] + 1:
+                raise HTTPException(status_code=400, detail="Shared positions must be consecutive")
+    
+    game = get_tournament_game(db, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    tournament = validate_tournament_exists(db, game.tournament_id)
+    validate_tournament_not_finished(tournament)
+    
     try:
-        import json
-        
-        # Validate positions
-        if not positions or len(positions) > 8:
-            raise HTTPException(status_code=400, detail="Positions must be 1-8 items")
-        
-        for pos in positions:
-            if not (1 <= pos <= 8):
-                raise HTTPException(status_code=400, detail="All positions must be between 1-8")
-        
-        # Check consecutive if multiple positions
-        if len(positions) > 1:
-            sorted_pos = sorted(positions)
-            for i in range(1, len(sorted_pos)):
-                if sorted_pos[i] != sorted_pos[i-1] + 1:
-                    raise HTTPException(status_code=400, detail="Shared positions must be consecutive")
-        
-        game = get_tournament_game(db, game_id)
-        if not game:
-            raise HTTPException(status_code=404, detail="Game not found")
-        
-        tournament = validate_tournament_exists(db, game.tournament_id)
         
         # Перевірка прав доступу
         if not can_submit_game_results(db, game_id, tournament.id, current_user):
@@ -394,8 +486,6 @@ async def submit_participant_position(
         game_participant.calculated_points = calculated_points
         game_participant.points = int(calculated_points)
         
-        print(f"💾 Setting points for participant {participant_id}: calculated={calculated_points}, points={int(calculated_points)}")
-        
         # Mark as modified to ensure SQLAlchemy tracks the change
         from sqlalchemy.orm import attributes
         attributes.flag_modified(game_participant, "positions")
@@ -414,8 +504,6 @@ async def submit_participant_position(
         # Commit changes first before recalculating total score
         db.commit()
         db.refresh(game_participant)
-        
-        print(f"✅ After commit - participant {participant_id}: points={game_participant.points}, calculated={game_participant.calculated_points}")
         
         # Now recalculate total score after commit
         update_participant_total_score(db, participant_id)

@@ -73,8 +73,10 @@ async def auth_callback(code: str, state: str = None, db: Session = Depends(get_
                     if db_user.battletag != user_info.battletag:
                         logger.info(f"Updating battletag: {db_user.battletag} -> {user_info.battletag}")
                         db_user.battletag = user_info.battletag
-                    # Оновити рейтинг
-                    db_user.battlegrounds_rating = bg_rating
+                    # Оновити рейтинг тільки якщо його немає
+                    if db_user.battlegrounds_rating is None:
+                        db_user.battlegrounds_rating = bg_rating
+                        logger.info(f"Setting initial BG rating: {bg_rating}")
                     db.commit()
                     db.refresh(db_user)
                 break
