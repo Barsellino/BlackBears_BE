@@ -40,8 +40,17 @@ def upgrade() -> None:
     # op.drop_column('users', 'age')
     
     # For fresh DB, we need to create tables from scratch
-    # This is handled by SQLAlchemy metadata in the next migration
-    pass
+    # Import Base and engine to create all tables
+    from db import Base, engine
+    from models.user import User
+    from models.tournament import Tournament
+    from models.tournament_participant import TournamentParticipant
+    from models.tournament_round import TournamentRound
+    from models.tournament_game import TournamentGame
+    from models.game_participant import GameParticipant
+    
+    # Create all tables
+    Base.metadata.create_all(bind=engine)
     # ### end Alembic commands ###
 
 
