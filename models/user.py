@@ -15,6 +15,7 @@ class User(Base):
     battletag = Column(String, nullable=False)
     name = Column(String, nullable=True)
     phone = Column(String, nullable=True)
+    telegram = Column(String, nullable=True)
     email = Column(String, nullable=True)
     battlegrounds_rating = Column(Integer, nullable=True)
     role = Column(

@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+from datetime import datetime
 from pydantic import BaseModel
 from api.deps.db import get_db
 from core.validators import (
@@ -22,7 +23,8 @@ from schemas.tournament import (
     Tournament, TournamentCreate, TournamentUpdate, TournamentWithParticipants,
     TournamentParticipant, LobbyMakerPriorityUpdate
 )
-from core.auth import get_current_active_user
+from core.auth import get_current_active_user, get_current_user_optional
+from core.roles import UserRole
 from models.user import User
 
 router = APIRouter(prefix="/tournaments", tags=["Tournaments"])
@@ -60,12 +62,32 @@ async def get_my_tournaments(
 @router.get("/{tournament_id}", response_model=TournamentWithParticipants)
 async def get_tournament_details(
     tournament_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """Get tournament details with participants"""
     tournament = get_tournament(db, tournament_id)
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    # Check if user has access to sensitive data
+    has_access = False
+    if current_user:
+        is_admin = current_user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]
+        is_creator = tournament.creator_id == current_user.id
+        has_access = is_admin or is_creator
+        
+    # Populate participant details
+    for participant in tournament.participants:
+        # Always set public info
+        participant.battletag = participant.user.battletag
+        participant.name = participant.user.name
+        
+        if has_access:
+            participant.phone = participant.user.phone
+            participant.telegram = participant.user.telegram
+            participant.battlegrounds_rating = participant.user.battlegrounds_rating
+            
     return tournament
 
 

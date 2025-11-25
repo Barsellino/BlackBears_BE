@@ -52,6 +52,26 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     return user
 
 
+def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+    db: Session = Depends(get_db)
+):
+    if not credentials:
+        return None
+    
+    try:
+        payload = jwt.decode(credentials.credentials, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        user_id: int = payload.get("sub")
+        if user_id is None:
+            return None
+        token_data = TokenData(user_id=user_id)
+    except JWTError:
+        return None
+        
+    user = db.query(User).filter(User.id == token_data.user_id).first()
+    return user
+
+
 def get_current_active_user(current_user: User = Depends(get_current_user)):
     if not current_user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")

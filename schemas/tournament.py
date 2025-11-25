@@ -114,6 +114,9 @@ class TournamentParticipant(TournamentParticipantBase):
     # User info
     battletag: Optional[str] = None
     name: Optional[str] = None
+    phone: Optional[str] = None
+    telegram: Optional[str] = None
+    battlegrounds_rating: Optional[int] = None
 
     class Config:
         from_attributes = True

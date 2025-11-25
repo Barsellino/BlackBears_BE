@@ -10,6 +10,7 @@ class UserBase(BaseModel):
     battletag: str
     name: Optional[str] = None
     phone: Optional[str] = None
+    telegram: Optional[str] = None
     email: Optional[EmailStr] = None
     battlegrounds_rating: Optional[int] = None
 
@@ -21,6 +22,7 @@ class UserCreate(UserBase):
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
+    telegram: Optional[str] = None
     email: Optional[EmailStr] = None
     battlegrounds_rating: Optional[int] = None
     role: Optional[UserRole] = None
