@@ -57,24 +57,41 @@ async def value_error_handler(request: Request, exc: ValueError):
     )
 
 
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    import traceback
+    error_traceback = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    logger.error(f"Unhandled exception: {error_traceback}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": str(exc),
+            "type": type(exc).__name__,
+            "traceback": error_traceback
+        }
+    )
+
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up application...")
-    Base.metadata.create_all(bind=engine)
     
-    # Автоматична міграція: додати last_seen якщо немає
-    from sqlalchemy import text
+    # Run database migrations automatically
     try:
-        with engine.connect() as conn:
-            conn.execute(text("""
-                ALTER TABLE users 
-                ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP WITH TIME ZONE;
-            """))
-            conn.commit()
-            logger.info("Migration: last_seen column added/verified")
-    except Exception as e:
-        logger.warning(f"Migration warning (may be already applied): {e}")
+        import subprocess
+        logger.info("Running database migrations...")
+        result = subprocess.run(
+            ["python3", "-m", "alembic", "upgrade", "head"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        logger.info(f"Migrations completed successfully: {result.stdout}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Migration failed: {e.stderr}")
+        raise RuntimeError(f"Database migration failed: {e.stderr}")
     
+    Base.metadata.create_all(bind=engine)
     logger.info("Database tables created")
 
 @app.on_event("shutdown")

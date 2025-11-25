@@ -8,6 +8,15 @@ from schemas.tournament import TournamentCreate, TournamentUpdate
 def create_tournament(db: Session, tournament: TournamentCreate, creator_id: int):
     tournament_data = tournament.dict()
     
+    # Validate total_participants is divisible by 8
+    total_participants = tournament_data['total_participants']
+    if total_participants % 8 != 0:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail=f"Total participants must be divisible by 8 (got {total_participants})"
+        )
+    
     # Auto-calculate total_rounds if not provided
     if tournament_data.get('total_rounds') is None:
         import math
@@ -29,7 +38,7 @@ def get_tournament(db: Session, tournament_id: int):
     
     tournament = db.query(Tournament).options(
         joinedload(Tournament.participants).joinedload(TournamentParticipant.user)
-    ).filter(Tournament.id == tournament_id).first()
+    ).filter(Tournament.id == tournament_id, Tournament.is_deleted == False).first()
     
     if tournament:
         # Add user info to participants
@@ -59,11 +68,11 @@ def get_tournament(db: Session, tournament_id: int):
 
 
 def get_tournaments(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(Tournament).offset(skip).limit(limit).all()
+    return db.query(Tournament).filter(Tournament.is_deleted == False).offset(skip).limit(limit).all()
 
 
 def get_user_tournaments(db: Session, user_id: int):
-    return db.query(Tournament).filter(Tournament.creator_id == user_id).all()
+    return db.query(Tournament).filter(Tournament.creator_id == user_id, Tournament.is_deleted == False).all()
 
 
 def update_tournament(db: Session, tournament_id: int, tournament_update: TournamentUpdate):
@@ -81,9 +90,10 @@ def update_tournament(db: Session, tournament_id: int, tournament_update: Tourna
 
 
 def delete_tournament(db: Session, tournament_id: int):
-    db_tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+    db_tournament = db.query(Tournament).filter(Tournament.id == tournament_id, Tournament.is_deleted == False).first()
     if db_tournament:
-        db.delete(db_tournament)
+        # Soft delete: set flag instead of removing row
+        db_tournament.is_deleted = True
         db.commit()
         return True
     return False

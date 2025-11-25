@@ -4,6 +4,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+from sqlalchemy.orm.attributes import flag_modified
 
 from core.auth import get_admin, get_super_admin, get_current_active_user
 from core.roles import UserRole
@@ -217,3 +218,80 @@ async def get_admin_stats(
             role.value: count for role, count in role_stats
         }
     }
+
+# ----------------------------------------------------------------------
+# Global favorite lobby makers (per user)
+# ----------------------------------------------------------------------
+
+@router.get("/favorite-lobby-makers")
+async def get_favorite_lobby_makers(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Return the logged‑in user's global favorite lobby makers list (ordered)."""
+    fav = current_user.favorite_lobby_makers or []
+    users = db.query(User).filter(User.id.in_(fav)).all()
+    ordered = sorted(
+        users,
+        key=lambda u: fav.index(u.id) if u.id in fav else len(fav),
+    )
+    return {
+        "priority_list": [
+            {"user_id": u.id, "battletag": u.battletag, "name": u.name}
+            for u in ordered
+        ]
+    }
+
+@router.post("/favorite-lobby-makers")
+async def add_favorite_lobby_maker(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Add a user to the caller's favorite lobby makers (append to end)."""
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    fav = current_user.favorite_lobby_makers or []
+    if user_id not in fav:
+        fav.append(user_id)
+        current_user.favorite_lobby_makers = fav
+        flag_modified(current_user, "favorite_lobby_makers")
+        db.commit()
+    return {"message": "Added", **(await get_favorite_lobby_makers(db=db, current_user=current_user))}
+
+@router.delete("/favorite-lobby-makers/{user_id}")
+async def delete_favorite_lobby_maker(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Remove a user from the caller's favorite lobby makers list."""
+    fav = current_user.favorite_lobby_makers or []
+    if user_id in fav:
+        fav.remove(user_id)
+        current_user.favorite_lobby_makers = fav
+        flag_modified(current_user, "favorite_lobby_makers")
+        db.commit()
+    return {"message": "Removed", **(await get_favorite_lobby_makers(db=db, current_user=current_user))}
+
+@router.put("/favorite-lobby-makers/order")
+async def reorder_favorite_lobby_makers(
+    priority_list: List[int],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Replace the whole ordering of favorite lobby makers.
+    The list must contain exactly the same user IDs currently stored.
+    """
+    current = set(current_user.favorite_lobby_makers or [])
+    if set(priority_list) != current:
+        raise HTTPException(
+            status_code=400,
+            detail="Priority list must contain the same user IDs as current favorites",
+        )
+    current_user.favorite_lobby_makers = priority_list
+    flag_modified(current_user, "favorite_lobby_makers")
+    db.commit()
+    return {"message": "Order updated", **(await get_favorite_lobby_makers(db=db, current_user=current_user))}
+

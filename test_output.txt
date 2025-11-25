@@ -1,0 +1,172 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.9.6, pytest-8.4.2, pluggy-1.6.0 -- /Library/Developer/CommandLineTools/usr/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/maksimdriga/PycharmProjects/BleackBears_BE
+configfile: pytest.ini
+plugins: asyncio-1.2.0, anyio-4.11.0
+asyncio: mode=strict, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_lobby_maker_priority.py::test_lobby_maker_priority_assignment FAILED [100%]
+
+=================================== FAILURES ===================================
+_____________________ test_lobby_maker_priority_assignment _____________________
+
+db_session = <sqlalchemy.orm.session.Session object at 0x11002f8b0>
+client = <starlette.testclient.TestClient object at 0x107faac40>
+
+    def test_lobby_maker_priority_assignment(db_session, client):
+        # 1️⃣ Create creator and participants
+>       creator = create_user(db_session, 1)
+
+tests/test_lobby_maker_priority.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_lobby_maker_priority.py:49: in create_user
+    user = User(
+<string>:4: in __init__
+    ???
+../../Library/Python/3.9/lib/python/site-packages/sqlalchemy/orm/state.py:572: in _initialize_instance
+    manager.dispatch.init_failure(self, args, kwargs)
+../../Library/Python/3.9/lib/python/site-packages/sqlalchemy/util/langhelpers.py:224: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+../../Library/Python/3.9/lib/python/site-packages/sqlalchemy/orm/state.py:569: in _initialize_instance
+    manager.original_init(*mixed[1:], **kwargs)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <models.user.User object at 0x107faa8e0>
+kwargs = {'battletag': 'User1#1234', 'id': 1, 'is_online': True, 'last_seen': datetime.datetime(2025, 11, 25, 0, 8, 23, 206645), ...}
+cls_ = <class 'models.user.User'>, k = 'is_online'
+
+    def _declarative_constructor(self: Any, **kwargs: Any) -> None:
+        """A simple constructor that allows initialization from kwargs.
+    
+        Sets attributes on the constructed instance using the names and
+        values in ``kwargs``.
+    
+        Only keys that are present as
+        attributes of the instance's class are allowed. These could be,
+        for example, any mapped columns or relationships.
+        """
+        cls_ = type(self)
+        for k in kwargs:
+            if not hasattr(cls_, k):
+                raise TypeError(
+                    "%r is an invalid keyword argument for %s" % (k, cls_.__name__)
+                )
+>           setattr(self, k, kwargs[k])
+E           AttributeError: can't set attribute
+
+../../Library/Python/3.9/lib/python/site-packages/sqlalchemy/orm/decl_base.py:2182: AttributeError
+=============================== warnings summary ===============================
+schemas/auth.py:27
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/auth.py:27: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class User(UserBase):
+
+schemas/tournament.py:40
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/tournament.py:40: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    @validator('registration_deadline', pre=True)
+
+schemas/tournament.py:46
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/tournament.py:46: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    @validator('total_rounds')
+
+schemas/tournament.py:52
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/tournament.py:52: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    @validator('start_date')
+
+schemas/tournament.py:61
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/tournament.py:61: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    @validator('total_participants')
+
+schemas/tournament.py:81
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/tournament.py:81: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class Tournament(TournamentBase):
+
+schemas/tournament.py:106
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/tournament.py:106: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class TournamentParticipant(TournamentParticipantBase):
+
+schemas/tournament.py:131
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/tournament.py:131: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class TournamentRound(TournamentRoundBase):
+
+schemas/tournament.py:153
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/tournament.py:153: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class TournamentGame(TournamentGameBase):
+
+schemas/tournament.py:188
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/tournament.py:188: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class GameParticipant(GameParticipantBase):
+
+schemas/game_results.py:12
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/game_results.py:12: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    results: List[GameResultInput] = Field(..., min_items=1, max_items=8)
+
+schemas/game_results.py:12
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/game_results.py:12: PydanticDeprecatedSince20: `max_items` is deprecated and will be removed, use `max_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    results: List[GameResultInput] = Field(..., min_items=1, max_items=8)
+
+schemas/game_results.py:14
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/game_results.py:14: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    @validator('results')
+
+schemas/game_results_v2.py:6
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/game_results_v2.py:6: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    positions: List[int] = Field(..., min_items=1, max_items=8, description="Shared positions (e.g. [6,7,8] for tie)")
+
+schemas/game_results_v2.py:6
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/game_results_v2.py:6: PydanticDeprecatedSince20: `max_items` is deprecated and will be removed, use `max_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    positions: List[int] = Field(..., min_items=1, max_items=8, description="Shared positions (e.g. [6,7,8] for tie)")
+
+schemas/game_results_v2.py:8
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/game_results_v2.py:8: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    @validator('positions')
+
+schemas/game_results_v2.py:25
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/game_results_v2.py:25: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    results: List[GameResultInputV2] = Field(..., min_items=1, max_items=8)
+
+schemas/game_results_v2.py:25
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/game_results_v2.py:25: PydanticDeprecatedSince20: `max_items` is deprecated and will be removed, use `max_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    results: List[GameResultInputV2] = Field(..., min_items=1, max_items=8)
+
+schemas/game_results_v2.py:27
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/game_results_v2.py:27: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    @validator('results')
+
+schemas/user.py:30
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/schemas/user.py:30: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class UserRead(UserBase):
+
+main.py:75
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/main.py:75: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../Library/Python/3.9/lib/python/site-packages/fastapi/applications.py:4575
+../../Library/Python/3.9/lib/python/site-packages/fastapi/applications.py:4575
+  /Users/maksimdriga/Library/Python/3.9/lib/python/site-packages/fastapi/applications.py:4575: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+main.py:97
+  /Users/maksimdriga/PycharmProjects/BleackBears_BE/main.py:97: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_lobby_maker_priority.py::test_lobby_maker_priority_assignment - AttributeError: can't set attribute
+======================== 1 failed, 24 warnings in 6.06s ========================

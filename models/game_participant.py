@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, ForeignKey, UniqueConstraint, String, Float
+from sqlalchemy import Column, Integer, ForeignKey, UniqueConstraint, String, Float, Boolean
 from sqlalchemy.orm import relationship
 from db import Base
 
@@ -14,6 +14,7 @@ class GameParticipant(Base):
     points = Column(Integer, nullable=True)    # Points earned (1-8) - deprecated
     positions = Column(String, nullable=True)  # JSON array of shared positions e.g. "[6,7,8]"
     calculated_points = Column(Float, nullable=True)  # Points calculated from positions
+    is_lobby_maker = Column(Boolean, default=False)
     
     # Relationships
     game = relationship("TournamentGame", back_populates="participants")

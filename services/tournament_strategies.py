@@ -8,6 +8,7 @@ from models.tournament_round import TournamentRound, RoundStatus
 from models.tournament_game import TournamentGame, GameStatus
 from models.game_participant import GameParticipant
 from models.tournament_participant import TournamentParticipant
+from models.user import User
 from api.crud.round_crud import create_round_with_games, start_round, complete_round
 from api.crud.participant_crud import get_tournament_participants
 from api.crud.game_crud import get_round_games, get_game_participants, add_game_participant
@@ -61,7 +62,7 @@ class SwissStrategy(TournamentStrategy):
         first_round = create_round_with_games(db, tournament.id, 1, tournament.total_participants)
         
         # Randomly assign participants to games for first round
-        self._assign_participants_randomly(db, first_round, participants)
+        self._assign_participants_randomly(db, first_round, participants, tournament)
         
         # Start the round
         start_round(db, first_round.id)
@@ -131,7 +132,7 @@ class SwissStrategy(TournamentStrategy):
         ).order_by(TournamentParticipant.total_score.desc()).all()
         
         # Assign participants to games based on current standings
-        self._assign_participants_by_score(db, next_round, participants)
+        self._assign_participants_by_score(db, next_round, participants, tournament)
         
         # Start the round
         start_round(db, next_round.id)
@@ -187,7 +188,7 @@ class SwissStrategy(TournamentStrategy):
         db.refresh(tournament)
         return tournament
     
-    def _assign_participants_randomly(self, db: Session, round_obj: TournamentRound, participants: List):
+    def _assign_participants_randomly(self, db: Session, round_obj: TournamentRound, participants: List, tournament: Tournament):
         """Randomly assign participants to games in first round"""
         
         # Shuffle participants for random assignment
@@ -209,8 +210,11 @@ class SwissStrategy(TournamentStrategy):
                 db.add(game_participant)
         
         db.commit()
+        
+        # Assign Lobby Makers
+        self._assign_lobby_makers(db, round_obj, tournament)
     
-    def _assign_participants_by_score(self, db: Session, round_obj: TournamentRound, participants: List):
+    def _assign_participants_by_score(self, db: Session, round_obj: TournamentRound, participants: List, tournament: Tournament):
         """Assign participants to games based on current scores (Swiss pairing)"""
         
         # Get games for this round
@@ -229,4 +233,61 @@ class SwissStrategy(TournamentStrategy):
                 ))
         
         db.bulk_save_objects(game_participants)
+        db.commit()
+        
+        # Assign Lobby Makers
+        self._assign_lobby_makers(db, round_obj, tournament)
+
+    def _assign_lobby_makers(self, db: Session, round_obj: TournamentRound, tournament: Tournament):
+        """Assign Lobby Makers to games based on priority list"""
+        # First, try to get global favorite lobby makers from tournament creator
+        creator = db.query(User).filter(User.id == tournament.creator_id).first()
+        global_favorites = creator.favorite_lobby_makers if creator and creator.favorite_lobby_makers else []
+        
+        # Combine global favorites with tournament-specific priority list
+        # Global favorites have higher priority
+        tournament_priority = tournament.lobby_maker_priority_list or []
+        
+        # Merge lists: global first, then tournament-specific (avoiding duplicates)
+        priority_list = global_favorites + [uid for uid in tournament_priority if uid not in global_favorites]
+        
+        # Get games without joinedload to avoid relationship issues
+        games = db.query(TournamentGame).filter(
+            TournamentGame.round_id == round_obj.id
+        ).all()
+        
+        for game in games:
+            # Refresh game to ensure clean state
+            db.refresh(game)
+            
+            game_participants = get_game_participants(db, game.id)
+            
+            # Find candidate from priority list
+            lobby_maker_user_id = None
+            
+            # Check priority list first
+            for user_id in priority_list:
+                # Check if this user is in the game
+                participant = next(
+                    (gp for gp in game_participants 
+                     if db.query(TournamentParticipant).filter_by(id=gp.participant_id).first().user_id == user_id),
+                    None
+                )
+                
+                if participant:
+                    lobby_maker_user_id = user_id
+                    break
+            
+            # If found, assign
+            if lobby_maker_user_id:
+                game.lobby_maker_id = lobby_maker_user_id
+                
+                # Update is_lobby_maker flag
+                for gp in game_participants:
+                    # Access via relationship (lazy load)
+                    if gp.participant.user_id == lobby_maker_user_id:
+                        gp.is_lobby_maker = True
+                    else:
+                        gp.is_lobby_maker = False
+                        
         db.commit()

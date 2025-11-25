@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.types import Enum as SQLEnum
+from sqlalchemy.dialects.postgresql import JSON
 from db import Base
 from core.roles import UserRole
 
@@ -25,6 +26,9 @@ class User(Base):
     last_seen = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    settings = Column(JSON, nullable=False, default={})
+    # Global list of favorite lobby makers (ordered list of user IDs)
+    favorite_lobby_makers = Column(JSON, nullable=True)
     
     @property
     def is_online(self) -> bool:

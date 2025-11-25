@@ -20,7 +20,7 @@ from api.crud.game_crud import move_participant_to_game
 from services.tournament_manager import TournamentManager
 from schemas.tournament import (
     Tournament, TournamentCreate, TournamentUpdate, TournamentWithParticipants,
-    TournamentParticipant
+    TournamentParticipant, LobbyMakerPriorityUpdate
 )
 from core.auth import get_current_active_user
 from models.user import User
@@ -86,6 +86,81 @@ async def update_tournament_details(
     
     updated_tournament = update_tournament(db, tournament_id, tournament_update)
     return updated_tournament
+
+
+@router.delete("/{tournament_id}")
+async def delete_tournament_endpoint(
+    tournament_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Delete tournament (only creator or admin can delete)"""
+    from api.crud.tournament_crud import delete_tournament
+    from core.roles import UserRole
+    
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    # Check permissions: creator or admin
+    is_admin = current_user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]
+    is_creator = tournament.creator_id == current_user.id
+    
+    if not (is_admin or is_creator):
+        raise HTTPException(
+            status_code=403,
+            detail="Only tournament creator or admin can delete tournament"
+        )
+    
+    # Delete tournament
+    success = delete_tournament(db, tournament_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete tournament")
+    
+    return {"message": "Tournament deleted successfully"}
+
+
+@router.put("/{tournament_id}/lobby-makers/priority", response_model=List[int])
+async def update_lobby_maker_priority(
+    tournament_id: int,
+    priority_data: LobbyMakerPriorityUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Update lobby maker priority list (only creator)"""
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    if tournament.creator_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only tournament creator can update priority list")
+    
+    # Validate that all user_ids exist
+    for user_id in priority_data.priority_list:
+        validate_user_exists(db, user_id)
+    
+    tournament.lobby_maker_priority_list = priority_data.priority_list
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(tournament, "lobby_maker_priority_list")
+    
+    db.commit()
+    db.refresh(tournament)
+    
+    return tournament.lobby_maker_priority_list or []
+
+
+@router.get("/{tournament_id}/lobby-makers/priority", response_model=List[int])
+async def get_lobby_maker_priority(
+    tournament_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get lobby maker priority list"""
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    return tournament.lobby_maker_priority_list or []
 
 
 @router.post("/{tournament_id}/join", response_model=TournamentParticipant)

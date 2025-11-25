@@ -32,17 +32,15 @@ class TournamentBase(BaseModel):
     total_participants: int = Field(..., ge=8, le=128, description="Total participants (must be divisible by 8)")
     total_rounds: int = Field(..., ge=1, le=10, description="Number of rounds (required)")
     registration_deadline: Optional[datetime] = None
+    total_rounds: int = Field(..., ge=1, le=10, description="Number of rounds (required)")
+    registration_deadline: Optional[datetime] = None
     start_date: Optional[datetime] = None
+    lobby_maker_priority_list: Optional[List[int]] = None
 
     @validator('registration_deadline', pre=True)
     def parse_registration_deadline(cls, v):
         if v == "" or v is None:
             return None
-        return v
-    
-    @validator('total_participants')
-    def validate_participants(cls, v):
-        validate_participants_count(v)
         return v
     
     @validator('total_rounds')
@@ -60,7 +58,10 @@ class TournamentBase(BaseModel):
 
 
 class TournamentCreate(TournamentBase):
-    pass
+    @validator('total_participants')
+    def validate_participants(cls, v):
+        validate_participants_count(v)
+        return v
 
 
 class TournamentUpdate(BaseModel):
@@ -68,7 +69,13 @@ class TournamentUpdate(BaseModel):
     description: Optional[str] = None
     registration_deadline: Optional[datetime] = None
     start_date: Optional[datetime] = None
+    start_date: Optional[datetime] = None
     status: Optional[TournamentStatus] = None
+    lobby_maker_priority_list: Optional[List[int]] = None
+
+
+class LobbyMakerPriorityUpdate(BaseModel):
+    priority_list: List[int]
 
 
 class Tournament(TournamentBase):
@@ -76,6 +83,9 @@ class Tournament(TournamentBase):
     creator_id: int
     current_round: int
     status: TournamentStatus
+    current_round: int
+    status: TournamentStatus
+    lobby_maker_priority_list: Optional[List[int]] = None
     end_date: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -151,6 +161,7 @@ class TournamentGame(TournamentGameBase):
     
     # Round info
     round_number: Optional[int] = None
+    lobby_maker_id: Optional[int] = None
     
     # Computed fields
     can_edit: Optional[bool] = None
@@ -187,6 +198,7 @@ class GameParticipant(GameParticipantBase):
     # Additional fields for positions
     positions: Optional[str] = None
     calculated_points: Optional[float] = None
+    is_lobby_maker: bool = False
 
     class Config:
         from_attributes = True

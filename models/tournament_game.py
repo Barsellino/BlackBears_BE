@@ -18,6 +18,7 @@ class TournamentGame(Base):
     tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
     round_id = Column(Integer, ForeignKey("tournament_rounds.id"), nullable=False)
     game_number = Column(Integer, nullable=False)  # 1-8 for each round
+    lobby_maker_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     # Game status and timing
     status = Column(Enum(GameStatus), default=GameStatus.PENDING)
@@ -31,6 +32,7 @@ class TournamentGame(Base):
     tournament = relationship("Tournament", back_populates="games")
     round = relationship("TournamentRound", back_populates="games")
     participants = relationship("GameParticipant", back_populates="game")
+    lobby_maker = relationship("User", foreign_keys=[lobby_maker_id])
     
     # Constraints
     __table_args__ = (

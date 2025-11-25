@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Enum, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from db import Base
@@ -26,6 +26,9 @@ class Tournament(Base):
     total_rounds = Column(Integer, nullable=False)
     current_round = Column(Integer, default=0)
     
+    # Lobby Maker settings
+    lobby_maker_priority_list = Column(JSON, nullable=True)  # List of user_ids [1, 2, 3]
+    
     # Status and timing
     status = Column(Enum(TournamentStatus), default=TournamentStatus.REGISTRATION)
     registration_deadline = Column(DateTime(timezone=True), nullable=True)
@@ -35,9 +38,12 @@ class Tournament(Base):
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
+
+    # Soft-delete flag
+    is_deleted = Column(Boolean, default=False, nullable=False)
+
     # Relationships
-    creator = relationship("User", back_populates="created_tournaments")
-    participants = relationship("TournamentParticipant", back_populates="tournament", cascade="all, delete-orphan")
-    rounds = relationship("TournamentRound", back_populates="tournament", cascade="all, delete-orphan")
-    games = relationship("TournamentGame", back_populates="tournament", cascade="all, delete-orphan")
+    creator = relationship("User", back_populates="created_tournaments", lazy='select')
+    participants = relationship("TournamentParticipant", back_populates="tournament", cascade="all, delete-orphan", lazy='select')
+    rounds = relationship("TournamentRound", back_populates="tournament", cascade="all, delete-orphan", lazy='select')
+    games = relationship("TournamentGame", back_populates="tournament", cascade="all, delete-orphan", lazy='select')

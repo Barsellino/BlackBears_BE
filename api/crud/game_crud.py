@@ -52,6 +52,10 @@ def get_round_games(db: Session, round_id: int):
     # Add user info to game participants and round number
     for game in games:
         game.round_number = game.round.round_number
+        
+        # Sort participants by ID to ensure stable order
+        game.participants = sorted(game.participants, key=lambda gp: gp.id)
+        
         for game_participant in game.participants:
             user = game_participant.participant.user
             game_participant.user_id = user.id

@@ -21,16 +21,17 @@ async def get_player_stats(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Get all finished tournaments for this player
+    # Get all finished tournaments for this player (exclude soft‑deleted)
     finished_participations = db.query(TournamentParticipant).join(Tournament).filter(
         and_(
             TournamentParticipant.user_id == user_id,
             Tournament.status == TournamentStatus.FINISHED,
+            Tournament.is_deleted == False,
             TournamentParticipant.final_position.isnot(None)
         )
     ).all()
     
-    # Get all completed games for this player
+    # Get all completed games for this player (exclude soft‑deleted tournaments)
     from models.game_participant import GameParticipant
     from models.tournament_game import TournamentGame, GameStatus
     import json
@@ -39,11 +40,14 @@ async def get_player_stats(
         TournamentGame
     ).join(
         TournamentParticipant, GameParticipant.participant_id == TournamentParticipant.id
+    ).join(
+        Tournament, Tournament.id == TournamentGame.tournament_id
     ).filter(
         and_(
             TournamentParticipant.user_id == user_id,
             TournamentGame.status == GameStatus.COMPLETED,
-            GameParticipant.positions.isnot(None)
+            GameParticipant.positions.isnot(None),
+            Tournament.is_deleted == False
         )
     ).all()
     
