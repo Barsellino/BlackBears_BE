@@ -154,10 +154,46 @@ async def clear_participant_result(
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     
-    # Validate tournament creator
+    # Validate tournament exists
     tournament = validate_tournament_exists(db, game.tournament_id)
     games_service.validate_tournament_not_finished(tournament)
-    validate_tournament_creator(tournament, current_user.id, "clear participant result")
+
+    # Validate permissions
+    # Allow if:
+    # 1. User is tournament creator
+    # 2. User is admin/super_admin
+    # 3. User is ANY participant of this game
+    # 4. User is Lobby Maker for this game
+    
+    is_creator = tournament.creator_id == current_user.id
+    is_admin = current_user.role in ["admin", "super_admin"]
+    
+    # Check if user is a participant in this game
+    from api.crud.game_crud import get_game_participants
+    from api.crud.participant_crud import get_participant
+    
+    game_participants = get_game_participants(db, game_id)
+    
+    is_game_participant = False
+    for gp in game_participants:
+        # We need to get the user_id for each participant
+        # Assuming gp.participant is loaded or we fetch it
+        p = get_participant(db, gp.participant_id)
+        if p and p.user_id == current_user.id:
+            is_game_participant = True
+            break
+            
+    # Check if user is Lobby Maker
+    is_lobby_maker = game.lobby_maker_id == current_user.id
+    
+    # Debug logging
+    from core.logging import logger
+    logger.info(f"Clear result permission check: user_id={current_user.id}, participant_id={participant_id}")
+    logger.info(f"is_creator={is_creator}, is_admin={is_admin}, is_game_participant={is_game_participant}, is_lobby_maker={is_lobby_maker}")
+    
+    if not (is_creator or is_admin or is_game_participant or is_lobby_maker):
+        from core.exceptions import UnauthorizedAction
+        raise UnauthorizedAction("clear participant result")
     
     try:
         games_service.clear_participant_result_logic(db, game_id, participant_id, game)
@@ -168,6 +204,8 @@ async def clear_participant_result(
             "participant_id": participant_id
         }
         
+    except HTTPException:
+        raise
     except TournamentException:
         raise
     except Exception as e:
@@ -200,6 +238,8 @@ async def submit_positions_batch(
             "game_completed": all_have_positions
         }
         
+    except HTTPException:
+        raise
     except TournamentException:
         raise
     except Exception as e:
@@ -236,6 +276,8 @@ async def submit_participant_position(
             "game_completed": all_have_positions
         }
         
+    except HTTPException:
+        raise
     except TournamentException:
         raise
     except Exception as e:

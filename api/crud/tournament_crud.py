@@ -37,10 +37,14 @@ def get_tournament(db: Session, tournament_id: int):
     from models.tournament import TournamentStatus
     
     tournament = db.query(Tournament).options(
+        joinedload(Tournament.creator),
         joinedload(Tournament.participants).joinedload(TournamentParticipant.user)
     ).filter(Tournament.id == tournament_id, Tournament.is_deleted == False).first()
     
     if tournament:
+        tournament.occupied_slots = len(tournament.participants)
+        tournament.creator_battletag = tournament.creator.battletag if tournament.creator else None
+
         # Add user info to participants
         for participant in tournament.participants:
             participant.battletag = participant.user.battletag
@@ -68,7 +72,27 @@ def get_tournament(db: Session, tournament_id: int):
 
 
 def get_tournaments(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(Tournament).filter(Tournament.is_deleted == False).offset(skip).limit(limit).all()
+    from sqlalchemy.orm import joinedload
+    from sqlalchemy import case
+    
+    # Sort by start_date (nulls last), then by created_at
+    tournaments = db.query(Tournament).options(
+        joinedload(Tournament.creator),
+        joinedload(Tournament.participants)
+    ).filter(Tournament.is_deleted == False).order_by(
+        case(
+            (Tournament.start_date.is_(None), 1),
+            else_=0
+        ),
+        Tournament.start_date.asc(),
+        Tournament.created_at.desc()
+    ).offset(skip).limit(limit).all()
+    
+    for tournament in tournaments:
+        tournament.occupied_slots = len(tournament.participants)
+        tournament.creator_battletag = tournament.creator.battletag if tournament.creator else None
+        
+    return tournaments
 
 
 def get_user_tournaments(db: Session, user_id: int):

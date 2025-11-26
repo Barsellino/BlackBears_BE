@@ -35,6 +35,11 @@ class Tournament(Base):
     start_date = Column(DateTime(timezone=True), nullable=True)
     end_date = Column(DateTime(timezone=True), nullable=True)
     
+    # New fields
+    is_free = Column(Boolean, default=True, nullable=False)
+    prizes = Column(JSON, nullable=True)  # List of prize descriptions
+    first_round_strategy = Column(String, default="RANDOM")  # RANDOM, BALANCED, STRONG_VS_STRONG
+    
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

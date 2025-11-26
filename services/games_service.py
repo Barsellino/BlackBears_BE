@@ -216,9 +216,13 @@ def clear_participant_result_logic(
     participant_id: int,
     game: TournamentGame
 ):
-    # Check if game is completed
+    # Check if tournament is finished (already checked in router, but good to keep in mind)
+    # We allow modifying completed games as long as the tournament/round isn't closed
+    
+    # If game was completed, we'll need to reopen it
     if game.status == GameStatus.COMPLETED:
-        raise HTTPException(status_code=400, detail="Cannot clear results of completed game")
+        game.status = GameStatus.ACTIVE
+        game.finished_at = None
     
     # Find and clear participant result
     game_participants = get_game_participants(db, game_id)
@@ -230,7 +234,15 @@ def clear_participant_result_logic(
     if not game_participant:
         raise HTTPException(status_code=404, detail="Participant not found in this game")
     
+    # Clear all result fields
     game_participant.points = None
+    game_participant.positions = None
+    game_participant.calculated_points = None
+    
+    # Mark as modified
+    from sqlalchemy.orm import attributes
+    attributes.flag_modified(game_participant, "positions")
+    attributes.flag_modified(game_participant, "calculated_points")
     
     # Recalculate participant's total score
     update_participant_total_score(db, participant_id)
@@ -254,6 +266,39 @@ def submit_positions_batch_logic(
 
         
     validate_lobby_maker_assigned(game)
+    
+    # First, validate all positions for conflicts
+    # Build a map of participant_id -> positions from updates
+    update_map = {}
+    for update in updates:
+        participant_id = update.get("participant_id")
+        positions = update.get("positions", update.get("position", []))
+        
+        if participant_id and positions:
+            update_map[participant_id] = positions
+    
+    # Check for conflicts between updates and existing positions
+    for participant_id, new_positions in update_map.items():
+        validate_position_conflicts(db, game_id, participant_id, new_positions)
+    
+    # Check for conflicts within the batch itself
+    all_positions_in_batch = {}
+    for participant_id, positions in update_map.items():
+        for pos in positions:
+            if pos in all_positions_in_batch:
+                # Get participant info for error message
+                other_participant_id = all_positions_in_batch[pos]
+                p1 = db.query(TournamentParticipant).filter_by(id=participant_id).first()
+                p2 = db.query(TournamentParticipant).filter_by(id=other_participant_id).first()
+                
+                battletag1 = p1.user.battletag if p1 and p1.user else "Unknown"
+                battletag2 = p2.user.battletag if p2 and p2.user else "Unknown"
+                
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Position conflict in batch: Position {pos} assigned to both {battletag1} and {battletag2}"
+                )
+            all_positions_in_batch[pos] = participant_id
         
     updated_count = 0
     
@@ -306,6 +351,86 @@ def submit_positions_batch_logic(
     return updated_count, all_have_positions
 
 
+def validate_position_conflicts(
+    db: Session,
+    game_id: int,
+    participant_id: int,
+    new_positions: List[int]
+) -> None:
+    """
+    Validate that new positions don't conflict with existing positions in the game.
+    Rules:
+    - Each position (1-8) can only be occupied once UNLESS it's part of a shared group
+    - Shared positions like [2,3] can be used max 2 times (size of group)
+    - Shared positions like [2,3,4] can be used max 3 times
+    - Different groups cannot overlap (if [2] is taken, [2,3] cannot be used)
+    """
+    game_participants = get_game_participants(db, game_id)
+    new_positions_tuple = tuple(sorted(new_positions))
+    
+    # Count how many times each position group is used
+    position_groups = {}  # {(2,3): count, (5,): count}
+    
+    # Track individual positions and their groups
+    position_to_groups = {}  # {2: [(2,3)], 5: [(5,)]}
+    
+    for gp in game_participants:
+        # Skip the participant we're updating
+        if gp.participant_id == participant_id:
+            continue
+            
+        # Skip participants without positions
+        if not gp.positions:
+            continue
+            
+        try:
+            existing_positions = json.loads(gp.positions)
+            existing_tuple = tuple(sorted(existing_positions))
+            
+            # Count this group
+            position_groups[existing_tuple] = position_groups.get(existing_tuple, 0) + 1
+            
+            # Track which positions belong to which groups
+            for pos in existing_positions:
+                if pos not in position_to_groups:
+                    position_to_groups[pos] = []
+                position_to_groups[pos].append(existing_tuple)
+                
+        except json.JSONDecodeError:
+            continue
+    
+    # Check if new positions conflict
+    # Rule 1: Check if any position in new_positions is already used in a DIFFERENT group
+    for pos in new_positions:
+        if pos in position_to_groups:
+            for existing_group in position_to_groups[pos]:
+                if existing_group != new_positions_tuple:
+                    # This position is used in a different group - conflict!
+                    participant = db.query(TournamentParticipant).join(
+                        GameParticipant, GameParticipant.participant_id == TournamentParticipant.id
+                    ).filter(
+                        GameParticipant.game_id == game_id,
+                        GameParticipant.positions == json.dumps(list(existing_group))
+                    ).first()
+                    
+                    battletag = participant.user.battletag if participant and participant.user else "Unknown"
+                    
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Position conflict: Position {pos} is already used in group {list(existing_group)} by {battletag}. Cannot use in group {new_positions}."
+                    )
+    
+    # Rule 2: Check if this exact group is already used max times
+    current_count = position_groups.get(new_positions_tuple, 0)
+    max_allowed = len(new_positions)  # Group of 2 can be used 2 times, group of 3 can be used 3 times
+    
+    if current_count >= max_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Position group {new_positions} can only be used {max_allowed} times. Already used {current_count} times."
+        )
+
+
 def submit_participant_position_logic(
     db: Session,
     game_id: int,
@@ -329,6 +454,9 @@ def submit_participant_position_logic(
         for i in range(1, len(sorted_pos)):
             if sorted_pos[i] != sorted_pos[i-1] + 1:
                 raise HTTPException(status_code=400, detail="Shared positions must be consecutive")
+    
+    # Validate position conflicts
+    validate_position_conflicts(db, game_id, participant_id, positions)
     
     if not can_submit_game_results(db, game_id, tournament.id, user):
         raise HTTPException(

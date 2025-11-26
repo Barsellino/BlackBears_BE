@@ -24,6 +24,18 @@ class GameStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class FirstRoundStrategy(str, Enum):
+    RANDOM = "RANDOM"
+    BALANCED = "BALANCED"
+    STRONG_VS_STRONG = "STRONG_VS_STRONG"
+
+
+class Prize(BaseModel):
+    name: str
+    img: Optional[str] = None
+    url: Optional[str] = None
+
+
 # Tournament schemas
 class TournamentBase(BaseModel):
     name: str = Field(..., min_length=3, max_length=100, description="Tournament name")
@@ -32,10 +44,13 @@ class TournamentBase(BaseModel):
     total_participants: int = Field(..., ge=8, le=128, description="Total participants (must be divisible by 8)")
     total_rounds: int = Field(..., ge=1, le=10, description="Number of rounds (required)")
     registration_deadline: Optional[datetime] = None
-    total_rounds: int = Field(..., ge=1, le=10, description="Number of rounds (required)")
-    registration_deadline: Optional[datetime] = None
     start_date: Optional[datetime] = None
     lobby_maker_priority_list: Optional[List[int]] = None
+    
+    # New fields
+    is_free: bool = True
+    prizes: Optional[List[Prize]] = None
+    first_round_strategy: FirstRoundStrategy = FirstRoundStrategy.RANDOM
 
     @validator('registration_deadline', pre=True)
     def parse_registration_deadline(cls, v):
@@ -72,6 +87,9 @@ class TournamentUpdate(BaseModel):
     start_date: Optional[datetime] = None
     status: Optional[TournamentStatus] = None
     lobby_maker_priority_list: Optional[List[int]] = None
+    is_free: Optional[bool] = None
+    prizes: Optional[List[Prize]] = None
+    first_round_strategy: Optional[FirstRoundStrategy] = None
 
 
 class LobbyMakerPriorityUpdate(BaseModel):
@@ -83,12 +101,19 @@ class Tournament(TournamentBase):
     creator_id: int
     current_round: int
     status: TournamentStatus
-    current_round: int
-    status: TournamentStatus
     lobby_maker_priority_list: Optional[List[int]] = None
     end_date: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    
+    # New fields (explicitly defined to ensure they are included)
+    is_free: bool
+    prizes: Optional[List[Prize]] = None
+    first_round_strategy: FirstRoundStrategy
+    
+    # Computed fields
+    occupied_slots: Optional[int] = 0
+    creator_battletag: Optional[str] = None
 
     class Config:
         from_attributes = True

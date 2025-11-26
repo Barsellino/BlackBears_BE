@@ -17,7 +17,7 @@ class TopicsService:
         with open(DATA_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        cls._cache = data  # кешуємо в пам'ять
+        cls._cache = data 
         return data
 
     @classmethod

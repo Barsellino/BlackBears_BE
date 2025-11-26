@@ -520,5 +520,13 @@ async def get_round_games(
             "status": tournament.status.value,
             "all_games_completed": all_games_completed
         },
+        "round": {
+            "id": round_obj.id,
+            "number": round_obj.round_number,
+            "status": round_obj.status.value,
+            "created_at": round_obj.created_at,
+            "started_at": round_obj.started_at,
+            "completed_at": round_obj.completed_at
+        },
         "games": sorted_games
     }

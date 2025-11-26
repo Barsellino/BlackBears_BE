@@ -45,6 +45,12 @@ def get_participant_by_ids(db: Session, tournament_id: int, user_id: int):
     ).first()
 
 
+def get_participant(db: Session, participant_id: int):
+    return db.query(TournamentParticipant).filter(
+        TournamentParticipant.id == participant_id
+    ).first()
+
+
 def leave_tournament(db: Session, tournament_id: int, user_id: int):
     participant = db.query(TournamentParticipant).filter(
         and_(

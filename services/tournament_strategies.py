@@ -61,8 +61,15 @@ class SwissStrategy(TournamentStrategy):
         # Create first round
         first_round = create_round_with_games(db, tournament.id, 1, tournament.total_participants)
         
-        # Randomly assign participants to games for first round
-        self._assign_participants_randomly(db, first_round, participants, tournament)
+        # Assign participants based on strategy
+        strategy = tournament.first_round_strategy
+        if strategy == "BALANCED":
+            self._assign_participants_balanced(db, first_round, participants, tournament)
+        elif strategy == "STRONG_VS_STRONG":
+            self._assign_participants_strong_vs_strong(db, first_round, participants, tournament)
+        else:
+            # Default to RANDOM
+            self._assign_participants_randomly(db, first_round, participants, tournament)
         
         # Start the round
         start_round(db, first_round.id)
@@ -236,6 +243,86 @@ class SwissStrategy(TournamentStrategy):
         db.commit()
         
         # Assign Lobby Makers
+        self._assign_lobby_makers(db, round_obj, tournament)
+
+    def _assign_participants_balanced(self, db: Session, round_obj: TournamentRound, participants: List, tournament: Tournament):
+        """
+        Assign participants to games balancing strong players across lobbies (Snake draft).
+        Example for 2 lobbies: 
+        1->A, 2->B, 3->B, 4->A, 5->A, 6->B...
+        """
+        # Sort participants by rating (descending)
+        # Assuming participant.user.battlegrounds_rating is available. If None, treat as 0.
+        sorted_participants = sorted(
+            participants, 
+            key=lambda p: p.user.battlegrounds_rating if p.user and p.user.battlegrounds_rating else 0, 
+            reverse=True
+        )
+        
+        games = get_round_games(db, round_obj.id)
+        num_games = len(games)
+        
+        # Prepare lists for each game
+        game_assignments = [[] for _ in range(num_games)]
+        
+        # Snake distribution
+        for i, participant in enumerate(sorted_participants):
+            # Determine which game to put this participant in
+            # Cycle: 0, 1, 2, ... N-1, N-1, ... 2, 1, 0
+            cycle_len = num_games * 2
+            pos_in_cycle = i % cycle_len
+            
+            if pos_in_cycle < num_games:
+                game_idx = pos_in_cycle
+            else:
+                game_idx = cycle_len - 1 - pos_in_cycle
+                
+            game_assignments[game_idx].append(participant)
+            
+        # Save to DB
+        game_participants = []
+        for i, game_players in enumerate(game_assignments):
+            game = games[i]
+            for participant in game_players:
+                game_participants.append(GameParticipant(
+                    game_id=game.id,
+                    participant_id=participant.id
+                ))
+        
+        db.bulk_save_objects(game_participants)
+        db.commit()
+        
+        self._assign_lobby_makers(db, round_obj, tournament)
+
+    def _assign_participants_strong_vs_strong(self, db: Session, round_obj: TournamentRound, participants: List, tournament: Tournament):
+        """
+        Assign participants to games grouping strong players together.
+        Lobby 1 gets top 8, Lobby 2 gets next 8, etc.
+        """
+        # Sort participants by rating (descending)
+        sorted_participants = sorted(
+            participants, 
+            key=lambda p: p.user.battlegrounds_rating if p.user and p.user.battlegrounds_rating else 0, 
+            reverse=True
+        )
+        
+        games = get_round_games(db, round_obj.id)
+        
+        # Simple fill
+        game_participants = []
+        participants_per_game = 8
+        
+        for i, participant in enumerate(sorted_participants):
+            game_index = i // participants_per_game
+            if game_index < len(games):
+                game_participants.append(GameParticipant(
+                    game_id=games[game_index].id,
+                    participant_id=participant.id
+                ))
+                
+        db.bulk_save_objects(game_participants)
+        db.commit()
+        
         self._assign_lobby_makers(db, round_obj, tournament)
 
     def _assign_lobby_makers(self, db: Session, round_obj: TournamentRound, tournament: Tournament):
