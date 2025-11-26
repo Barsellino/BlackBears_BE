@@ -96,24 +96,24 @@ class LobbyMakerPriorityUpdate(BaseModel):
     priority_list: List[int]
 
 
+class TournamentWinner(BaseModel):
+    user_id: int
+    battletag: str
+    final_position: int
+    total_score: float
+
+
 class Tournament(TournamentBase):
     id: int
     creator_id: int
     current_round: int
     status: TournamentStatus
-    lobby_maker_priority_list: Optional[List[int]] = None
-    end_date: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-    
-    # New fields (explicitly defined to ensure they are included)
-    is_free: bool
-    prizes: Optional[List[Prize]] = None
-    first_round_strategy: FirstRoundStrategy
-    
     # Computed fields
     occupied_slots: Optional[int] = 0
     creator_battletag: Optional[str] = None
+    winners: Optional[List[TournamentWinner]] = None
 
     class Config:
         from_attributes = True

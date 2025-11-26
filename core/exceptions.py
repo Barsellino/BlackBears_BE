@@ -17,8 +17,8 @@ class TournamentFull(TournamentException):
 
 
 class TournamentClosed(TournamentException):
-    def __init__(self):
-        super().__init__("Tournament registration is closed")
+    def __init__(self, detail: str = "Tournament registration is closed"):
+        super().__init__(detail)
 
 
 class AlreadyJoined(TournamentException):

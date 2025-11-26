@@ -35,6 +35,19 @@ def validate_tournament_registration_open(tournament: Tournament):
     """Validate tournament is open for registration"""
     if tournament.status != TournamentStatus.REGISTRATION:
         raise TournamentClosed()
+    
+    # Check deadline
+    if tournament.registration_deadline:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        deadline = tournament.registration_deadline
+        
+        # Ensure deadline is timezone-aware for comparison
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+            
+        if now > deadline:
+            raise TournamentClosed("Registration deadline has passed")
 
 
 def validate_tournament_not_full(db: Session, tournament: Tournament):

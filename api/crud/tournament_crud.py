@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from models.tournament import Tournament
+from models.tournament import Tournament, TournamentStatus
 from models.tournament_participant import TournamentParticipant
 from schemas.tournament import TournamentCreate, TournamentUpdate
 
@@ -45,6 +45,32 @@ def get_tournament(db: Session, tournament_id: int):
         tournament.occupied_slots = len(tournament.participants)
         tournament.creator_battletag = tournament.creator.battletag if tournament.creator else None
 
+        # Populate winners for finished tournaments
+        if tournament.status == TournamentStatus.FINISHED:
+            # Filter out participants with no user
+            valid_participants = [p for p in tournament.participants if p.user]
+            
+            # Sort by final_position (asc) then total_score (desc)
+            sorted_participants = sorted(
+                valid_participants,
+                key=lambda p: (p.final_position if p.final_position is not None else 999, -p.total_score)
+            )
+            
+            # Take top 3
+            top_3 = sorted_participants[:3]
+            
+            tournament.winners = [
+                {
+                    "user_id": p.user_id,
+                    "battletag": p.user.battletag,
+                    "final_position": p.final_position if p.final_position is not None else i+1,
+                    "total_score": p.total_score
+                }
+                for i, p in enumerate(top_3)
+            ]
+        else:
+            tournament.winners = []
+
         # Add user info to participants
         for participant in tournament.participants:
             participant.battletag = participant.user.battletag
@@ -71,15 +97,32 @@ def get_tournament(db: Session, tournament_id: int):
     return tournament
 
 
-def get_tournaments(db: Session, skip: int = 0, limit: int = 100):
+def get_tournaments(db: Session, skip: int = 0, limit: int = 100, status: List[TournamentStatus] = None):
     from sqlalchemy.orm import joinedload
     from sqlalchemy import case
     
-    # Sort by start_date (nulls last), then by created_at
-    tournaments = db.query(Tournament).options(
+    query = db.query(Tournament).options(
         joinedload(Tournament.creator),
-        joinedload(Tournament.participants)
-    ).filter(Tournament.is_deleted == False).order_by(
+        joinedload(Tournament.participants).joinedload(TournamentParticipant.user)
+    ).filter(Tournament.is_deleted == False)
+    
+    if status:
+        # Convert to model Enums to ensure compatibility
+        model_statuses = []
+        for s in status:
+            try:
+                # Get value whether it's an Enum or string
+                val = s.value if hasattr(s, 'value') else s
+                # Create model Enum from value
+                model_statuses.append(TournamentStatus(val))
+            except ValueError:
+                continue
+        
+        if model_statuses:
+            query = query.filter(Tournament.status.in_(model_statuses))
+        
+    # Sort by start_date (nulls last), then by created_at
+    tournaments = query.order_by(
         case(
             (Tournament.start_date.is_(None), 1),
             else_=0
@@ -91,6 +134,33 @@ def get_tournaments(db: Session, skip: int = 0, limit: int = 100):
     for tournament in tournaments:
         tournament.occupied_slots = len(tournament.participants)
         tournament.creator_battletag = tournament.creator.battletag if tournament.creator else None
+        
+        # Populate winners for finished tournaments
+        if tournament.status == TournamentStatus.FINISHED:
+            # Filter out participants with no user (should not happen but safe check)
+            valid_participants = [p for p in tournament.participants if p.user]
+            
+            # Sort by final_position (asc) then total_score (desc)
+            # If final_position is None (not finished properly), put at end
+            sorted_participants = sorted(
+                valid_participants,
+                key=lambda p: (p.final_position if p.final_position is not None else 999, -p.total_score)
+            )
+            
+            # Take top 3
+            top_3 = sorted_participants[:3]
+            
+            tournament.winners = [
+                {
+                    "user_id": p.user_id,
+                    "battletag": p.user.battletag,
+                    "final_position": p.final_position if p.final_position is not None else i+1,
+                    "total_score": p.total_score
+                }
+                for i, p in enumerate(top_3)
+            ]
+        else:
+            tournament.winners = []
         
     return tournaments
 

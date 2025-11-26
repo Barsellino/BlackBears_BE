@@ -21,7 +21,7 @@ from api.crud.game_crud import move_participant_to_game
 from services.tournament_manager import TournamentManager
 from schemas.tournament import (
     Tournament, TournamentCreate, TournamentUpdate, TournamentWithParticipants,
-    TournamentParticipant, LobbyMakerPriorityUpdate
+    TournamentParticipant, LobbyMakerPriorityUpdate, TournamentStatus
 )
 from core.auth import get_current_active_user, get_current_user_optional
 from core.roles import UserRole
@@ -44,10 +44,11 @@ async def create_new_tournament(
 async def list_tournaments(
     skip: int = 0,
     limit: int = 100,
+    status: Optional[List[TournamentStatus]] = Query(None, description="Filter by tournament status"),
     db: Session = Depends(get_db)
 ):
     """Get list of all tournaments"""
-    return get_tournaments(db, skip=skip, limit=limit)
+    return get_tournaments(db, skip=skip, limit=limit, status=status)
 
 
 @router.get("/my", response_model=List[Tournament])

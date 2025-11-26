@@ -36,7 +36,7 @@ async def get_all_users(
     - search: пошук по battletag, name, email
     - role: фільтр по ролі (super_admin, admin, premium, user)
     - is_active: фільтр по активності (true/false)
-    - sort_by: поле для сортування (created_at, battletag, battlegrounds_rating)
+    - sort_by: поле для сортування (created_at, battletag, battlegrounds_rating, last_seen)
     - sort_order: порядок сортування (asc/desc)
     """
     # Валідація параметрів
@@ -69,9 +69,10 @@ async def get_all_users(
     # Сортування
     sort_column = getattr(User, sort_by, User.created_at)
     if sort_order == "desc":
-        query = query.order_by(sort_column.desc())
+        # Для last_seen та інших полів, де NULL має бути в кінці
+        query = query.order_by(sort_column.desc().nulls_last())
     else:
-        query = query.order_by(sort_column.asc())
+        query = query.order_by(sort_column.asc().nulls_last())
     
     # Пагінація
     users = query.offset(offset).limit(limit).all()
