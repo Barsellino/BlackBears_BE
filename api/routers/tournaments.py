@@ -304,6 +304,62 @@ async def leave_tournament_endpoint(
     return {"message": "Successfully left tournament"}
 
 
+@router.post("/{tournament_id}/auto-fill")
+async def auto_fill_tournament(
+    tournament_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Auto-fill tournament with random users (for testing, creator or super_admin only)"""
+    from models.user import User as UserModel
+    from models.tournament_participant import TournamentParticipant as ParticipantModel
+    
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    # Only creator or super_admin
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN
+    if tournament.creator_id != current_user.id and not is_super_admin:
+        raise HTTPException(status_code=403, detail="Only creator or super admin can auto-fill")
+    
+    # Get current participants count
+    current_count = len(get_tournament_participants(db, tournament_id))
+    needed = tournament.total_participants - current_count
+    
+    if needed <= 0:
+        return {"message": "Tournament is already full", "added": 0}
+    
+    # Get random users who are not already in tournament
+    existing_user_ids = [p.user_id for p in tournament.participants]
+    existing_user_ids.append(tournament.creator_id)  # Exclude creator too
+    
+    available_users = db.query(UserModel).filter(
+        UserModel.id.notin_(existing_user_ids),
+        UserModel.is_active == True
+    ).limit(needed).all()
+    
+    added = 0
+    for user in available_users:
+        participant = ParticipantModel(
+            tournament_id=tournament_id,
+            user_id=user.id,
+            total_score=0,
+            finals_score=0
+        )
+        db.add(participant)
+        added += 1
+    
+    db.commit()
+    
+    return {
+        "message": f"Added {added} participants",
+        "added": added,
+        "total": current_count + added,
+        "needed": tournament.total_participants
+    }
+
+
 @router.get("/{tournament_id}/participants", response_model=List[TournamentParticipant])
 async def get_tournament_participants_endpoint(
     tournament_id: int,
