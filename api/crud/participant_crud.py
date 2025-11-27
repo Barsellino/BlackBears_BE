@@ -84,79 +84,180 @@ def get_tournament_leaderboard(db: Session, tournament_id: int):
     return participants
 
 
-def update_participant_total_score(db: Session, participant_id: int):
-    """Recalculate total score from all game results"""
-    # Use calculated_points (Float) instead of points (Integer)
-    subquery = db.query(
-        func.coalesce(func.sum(GameParticipant.calculated_points), 0)
-    ).filter(
-        GameParticipant.participant_id == participant_id
-    ).scalar_subquery()
+def get_finals_leaderboard(db: Session, tournament_id: int):
+    """Get leaderboard for finals only (top participants sorted by finals_score)"""
+    from models.user import User
+    from models.tournament import Tournament
+    from sqlalchemy.orm import joinedload
     
+    tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+    if not tournament or not tournament.finals_started:
+        return []
+    
+    # Get only participants who are in finals (top N by total_score)
+    finals_count = tournament.finals_participants_count or 8
+    
+    participants = db.query(TournamentParticipant).options(
+        joinedload(TournamentParticipant.user)
+    ).filter(
+        TournamentParticipant.tournament_id == tournament_id
+    ).order_by(TournamentParticipant.total_score.desc()).limit(finals_count).all()
+    
+    # Sort by finals_score for finals leaderboard
+    participants = sorted(participants, key=lambda p: p.finals_score or 0, reverse=True)
+    
+    # Add user info to participants
+    for participant in participants:
+        participant.battletag = participant.user.battletag
+        participant.name = participant.user.name
+    
+    return participants
+
+
+def update_participant_total_score(db: Session, participant_id: int):
+    """Recalculate total score and finals_score from all game results"""
+    from models.tournament_round import TournamentRound
+    from models.tournament_game import TournamentGame
+    from models.tournament import Tournament
+    
+    # Get participant's tournament
+    participant = db.query(TournamentParticipant).filter(
+        TournamentParticipant.id == participant_id
+    ).first()
+    
+    if not participant:
+        return
+    
+    tournament = db.query(Tournament).filter(
+        Tournament.id == participant.tournament_id
+    ).first()
+    
+    regular_rounds = tournament.regular_rounds or tournament.total_rounds
+    
+    # Calculate total_score from regular rounds only
+    regular_score = db.query(
+        func.coalesce(func.sum(GameParticipant.calculated_points), 0)
+    ).join(TournamentGame, GameParticipant.game_id == TournamentGame.id
+    ).join(TournamentRound, TournamentGame.round_id == TournamentRound.id
+    ).filter(
+        GameParticipant.participant_id == participant_id,
+        TournamentRound.round_number <= regular_rounds
+    ).scalar() or 0.0
+    
+    # Calculate finals_score from final rounds only
+    finals_score = db.query(
+        func.coalesce(func.sum(GameParticipant.calculated_points), 0)
+    ).join(TournamentGame, GameParticipant.game_id == TournamentGame.id
+    ).join(TournamentRound, TournamentGame.round_id == TournamentRound.id
+    ).filter(
+        GameParticipant.participant_id == participant_id,
+        TournamentRound.round_number > regular_rounds
+    ).scalar() or 0.0
+    
+    # Update both scores
     db.query(TournamentParticipant).filter(
         TournamentParticipant.id == participant_id
-    ).update({TournamentParticipant.total_score: subquery}, synchronize_session=False)
+    ).update({
+        TournamentParticipant.total_score: regular_score,
+        TournamentParticipant.finals_score: finals_score
+    }, synchronize_session=False)
     
     db.commit()
 
 
 def update_final_positions(db: Session, tournament_id: int):
     """
-    Update final positions based on total scores with tiebreakers.
+    Update final positions based on scores with tiebreakers.
+    
+    For tournaments WITH finals: winners determined by finals_score (only finalists get top positions)
+    For tournaments WITHOUT finals: winners determined by total_score
     
     Tiebreaker rules:
-    1. Higher total_score wins
-    2. If equal total_score, check best placement (lowest position number across all games)
+    1. Higher score wins (finals_score or total_score)
+    2. If equal score, check best placement (lowest position number across all games)
     3. If still tied, random 50/50 (coin flip)
     """
     import random
     import json
+    from models.tournament import Tournament
+    
+    tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+    use_finals_score = tournament.with_finals and tournament.finals_started
     
     # Get all participants with their game results
     participants = db.query(TournamentParticipant).filter(
         TournamentParticipant.tournament_id == tournament_id
     ).all()
     
-    # Calculate best placement for each participant
-    participant_data = []
-    for participant in participants:
-        # Get all game results for this participant
+    # Separate finalists and non-finalists if tournament has finals
+    finalists = []
+    non_finalists = []
+    
+    if use_finals_score:
+        # Get top N by total_score (those who qualified for finals)
+        sorted_by_total = sorted(participants, key=lambda p: -p.total_score)
+        finalists = sorted_by_total[:tournament.finals_participants_count]
+        non_finalists = sorted_by_total[tournament.finals_participants_count:]
+    else:
+        finalists = participants
+    
+    # Calculate best placement for finalists
+    finalist_data = []
+    for participant in finalists:
         game_results = db.query(GameParticipant).filter(
             GameParticipant.participant_id == participant.id
         ).all()
         
-        # Find best placement (lowest position number)
         best_placement = float('inf')
         for game_result in game_results:
             if game_result.positions:
                 try:
                     positions = json.loads(game_result.positions)
                     if positions:
-                        # Get the best (lowest) position from this game
                         min_position = min(positions)
                         best_placement = min(best_placement, min_position)
                 except (json.JSONDecodeError, ValueError):
                     pass
         
-        # If no valid placements found, set to worst possible
         if best_placement == float('inf'):
             best_placement = 999
         
-        participant_data.append({
+        # Use finals_score for finals, total_score otherwise
+        score = participant.finals_score if use_finals_score else participant.total_score
+        
+        finalist_data.append({
             'participant': participant,
-            'total_score': participant.total_score,
+            'score': score,
             'best_placement': best_placement,
-            'random_tiebreaker': random.random()  # For 50/50 coin flip
+            'random_tiebreaker': random.random()
         })
     
-    # Sort by: total_score DESC, best_placement ASC, random_tiebreaker ASC
-    participant_data.sort(
-        key=lambda x: (-x['total_score'], x['best_placement'], x['random_tiebreaker'])
+    # Sort finalists by: score DESC, best_placement ASC, random_tiebreaker ASC
+    finalist_data.sort(
+        key=lambda x: (-x['score'], x['best_placement'], x['random_tiebreaker'])
     )
     
-    # Assign final positions
-    for position, data in enumerate(participant_data, 1):
+    # Assign final positions to finalists (1, 2, 3, ... N)
+    for position, data in enumerate(finalist_data, 1):
         data['participant'].final_position = position
     
+    # For non-finalists, assign positions after finalists (N+1, N+2, ...)
+    if non_finalists:
+        non_finalist_data = []
+        for participant in non_finalists:
+            non_finalist_data.append({
+                'participant': participant,
+                'total_score': participant.total_score,
+                'random_tiebreaker': random.random()
+            })
+        
+        non_finalist_data.sort(
+            key=lambda x: (-x['total_score'], x['random_tiebreaker'])
+        )
+        
+        start_position = len(finalists) + 1
+        for position, data in enumerate(non_finalist_data, start_position):
+            data['participant'].final_position = position
+    
     db.commit()
-    return [data['participant'] for data in participant_data]
+    return [data['participant'] for data in finalist_data]

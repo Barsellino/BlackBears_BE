@@ -23,6 +23,10 @@ def create_tournament(db: Session, tournament: TournamentCreate, creator_id: int
         participants = tournament_data['total_participants']
         tournament_data['total_rounds'] = math.ceil(math.log2(participants))
     
+    # Store regular_rounds (original rounds before finals)
+    tournament_data['regular_rounds'] = tournament_data['total_rounds']
+    tournament_data['finals_started'] = False
+    
     db_tournament = Tournament(
         **tournament_data,
         creator_id=creator_id
@@ -59,12 +63,15 @@ def get_tournament(db: Session, tournament_id: int):
             # Take top 3
             top_3 = sorted_participants[:3]
             
+            # Use finals_score for tournaments with finals, total_score otherwise
+            use_finals = tournament.with_finals and tournament.finals_started
+            
             tournament.winners = [
                 {
                     "user_id": p.user_id,
                     "battletag": p.user.battletag,
                     "final_position": p.final_position if p.final_position is not None else i+1,
-                    "total_score": p.total_score
+                    "total_score": p.finals_score if use_finals else p.total_score
                 }
                 for i, p in enumerate(top_3)
             ]
@@ -150,12 +157,15 @@ def get_tournaments(db: Session, skip: int = 0, limit: int = 100, status: List[T
             # Take top 3
             top_3 = sorted_participants[:3]
             
+            # Use finals_score for tournaments with finals, total_score otherwise
+            use_finals = tournament.with_finals and tournament.finals_started
+            
             tournament.winners = [
                 {
                     "user_id": p.user_id,
                     "battletag": p.user.battletag,
                     "final_position": p.final_position if p.final_position is not None else i+1,
-                    "total_score": p.total_score
+                    "total_score": p.finals_score if use_finals else p.total_score
                 }
                 for i, p in enumerate(top_3)
             ]
@@ -170,11 +180,36 @@ def get_user_tournaments(db: Session, user_id: int):
 
 
 def update_tournament(db: Session, tournament_id: int, tournament_update: TournamentUpdate):
+    from fastapi import HTTPException
+    
     db_tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
     if not db_tournament:
         return None
     
     update_data = tournament_update.dict(exclude_unset=True)
+    
+    # Check if trying to update tournament structure (participants, rounds)
+    structure_fields = ['total_participants', 'total_rounds']
+    if any(field in update_data for field in structure_fields):
+        # Only allow changes if tournament hasn't started yet
+        if db_tournament.status != TournamentStatus.REGISTRATION:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot change tournament structure (participants, rounds) after tournament has started"
+            )
+        
+        # If changing total_participants, check if new value is valid
+        if 'total_participants' in update_data:
+            new_participants = update_data['total_participants']
+            current_participants_count = len(db_tournament.participants)
+            
+            # Check if new capacity is less than current number of registered participants
+            if new_participants < current_participants_count:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot reduce capacity to {new_participants}. Already have {current_participants_count} registered participants."
+                )
+    
     for field, value in update_data.items():
         setattr(db_tournament, field, value)
     

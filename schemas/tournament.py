@@ -51,12 +51,16 @@ class TournamentBase(BaseModel):
     is_free: bool = True
     prizes: Optional[List[Prize]] = None
     first_round_strategy: FirstRoundStrategy = FirstRoundStrategy.RANDOM
+    
+    # Finals settings
+    with_finals: bool = False
+    finals_games_count: Optional[int] = Field(None, ge=1, le=10, description="Number of games in finals")
+    finals_participants_count: Optional[int] = Field(None, ge=8, le=16, description="Number of participants in finals (8 or 16)")
 
     @validator('registration_deadline', pre=True)
     def parse_registration_deadline(cls, v):
         if v == "" or v is None:
             return None
-        return v
     
     @validator('total_rounds')
     def validate_rounds(cls, v, values):
@@ -69,6 +73,21 @@ class TournamentBase(BaseModel):
         if v and 'registration_deadline' in values and values['registration_deadline']:
             if v <= values['registration_deadline']:
                 raise ValueError('Start date must be after registration deadline')
+        return v
+        
+    @validator('finals_games_count')
+    def validate_finals_games(cls, v, values):
+        if values.get('with_finals') and v is None:
+            raise ValueError('finals_games_count is required when with_finals is True')
+        return v
+
+    @validator('finals_participants_count')
+    def validate_finals_participants(cls, v, values):
+        if values.get('with_finals'):
+            if v is None:
+                raise ValueError('finals_participants_count is required when with_finals is True')
+            if v not in [8, 16]:
+                raise ValueError('finals_participants_count must be 8 or 16')
         return v
 
 
@@ -84,12 +103,30 @@ class TournamentUpdate(BaseModel):
     description: Optional[str] = None
     registration_deadline: Optional[datetime] = None
     start_date: Optional[datetime] = None
-    start_date: Optional[datetime] = None
     status: Optional[TournamentStatus] = None
     lobby_maker_priority_list: Optional[List[int]] = None
     is_free: Optional[bool] = None
     prizes: Optional[List[Prize]] = None
     first_round_strategy: Optional[FirstRoundStrategy] = None
+    total_participants: Optional[int] = Field(None, ge=8, le=128, description="Total participants (must be divisible by 8)")
+    total_rounds: Optional[int] = Field(None, ge=1, le=10, description="Number of rounds")
+    
+    # Finals settings
+    with_finals: Optional[bool] = None
+    finals_games_count: Optional[int] = Field(None, ge=1, le=10)
+    finals_participants_count: Optional[int] = Field(None, ge=8, le=16)
+    
+    @validator('total_participants')
+    def validate_participants(cls, v):
+        if v is not None:
+            validate_participants_count(v)
+        return v
+    
+    @validator('total_rounds')
+    def validate_rounds(cls, v, values):
+        if v is not None and 'total_participants' in values and values['total_participants'] is not None:
+            validate_rounds_count(v, values['total_participants'])
+        return v
 
 
 class LobbyMakerPriorityUpdate(BaseModel):
@@ -103,17 +140,48 @@ class TournamentWinner(BaseModel):
     total_score: float
 
 
-class Tournament(TournamentBase):
+class Tournament(BaseModel):
+    """Response schema for Tournament - no validation on total_rounds"""
     id: int
+    name: str
+    description: Optional[str] = None
+    tournament_type: str = "SWISS"
+    total_participants: int
+    total_rounds: int  # Can be increased when finals start
     creator_id: int
     current_round: int
     status: TournamentStatus
+    registration_deadline: Optional[datetime] = None
+    start_date: Optional[datetime] = None
+    lobby_maker_priority_list: Optional[List[int]] = None
+    is_free: bool = True
+    prizes: Optional[List[Prize]] = None
+    first_round_strategy: FirstRoundStrategy = FirstRoundStrategy.RANDOM
     created_at: datetime
     updated_at: Optional[datetime] = None
+    
+    # Finals settings
+    with_finals: bool = False
+    finals_games_count: Optional[int] = None
+    finals_participants_count: Optional[int] = None
+    regular_rounds: Optional[int] = None  # Original rounds count (before finals)
+    finals_started: bool = False  # Whether finals have started
+    
     # Computed fields
     occupied_slots: Optional[int] = 0
     creator_battletag: Optional[str] = None
     winners: Optional[List[TournamentWinner]] = None
+    
+    # Finals participants (top-N sorted by finals_score)
+    finals: Optional[List["TournamentParticipant"]] = None
+    
+    # Tournament format info
+    format: Optional[dict] = None
+    
+    # User's participation status
+    my_status: Optional[str] = None  # "registered" | "playing" | "finished" | null
+    my_result: Optional[int] = None  # Position (finals position if was in finals, otherwise regular position)
+    was_in_finals: Optional[bool] = None  # True if user participated in finals
 
     class Config:
         from_attributes = True
@@ -133,6 +201,7 @@ class TournamentParticipant(TournamentParticipantBase):
     tournament_id: int
     user_id: int
     total_score: float
+    finals_score: float = 0.0  # Score from finals only
     final_position: Optional[int] = None
     joined_at: datetime
     

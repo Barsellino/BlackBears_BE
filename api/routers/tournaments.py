@@ -45,10 +45,65 @@ async def list_tournaments(
     skip: int = 0,
     limit: int = 100,
     status: Optional[List[TournamentStatus]] = Query(None, description="Filter by tournament status"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """Get list of all tournaments"""
-    return get_tournaments(db, skip=skip, limit=limit, status=status)
+    tournaments = get_tournaments(db, skip=skip, limit=limit, status=status)
+    
+    # Add my_status for each tournament if user is authenticated
+    if current_user:
+        from models.tournament_participant import TournamentParticipant
+        from models.tournament import TournamentStatus as ModelTournamentStatus
+        
+        for tournament in tournaments:
+            participant = db.query(TournamentParticipant).filter(
+                TournamentParticipant.tournament_id == tournament.id,
+                TournamentParticipant.user_id == current_user.id
+            ).first()
+            
+            if participant:
+                if tournament.status == ModelTournamentStatus.REGISTRATION:
+                    tournament.my_status = "registered"
+                elif tournament.status == ModelTournamentStatus.ACTIVE:
+                    tournament.my_status = "playing"
+                elif tournament.status == ModelTournamentStatus.FINISHED:
+                    tournament.my_status = "finished"
+                    
+                    # Check if tournament had finals and user participated in them
+                    if tournament.with_finals and tournament.finals_started:
+                        # Check if user was in finals (top N by total_score)
+                        top_participants = db.query(TournamentParticipant).filter(
+                            TournamentParticipant.tournament_id == tournament.id
+                        ).order_by(TournamentParticipant.total_score.desc()).limit(tournament.finals_participants_count).all()
+                        
+                        top_user_ids = [p.user_id for p in top_participants]
+                        if current_user.id in top_user_ids:
+                            # User was in finals - show finals position
+                            finalists_sorted = sorted(top_participants, key=lambda p: -p.finals_score)
+                            for i, p in enumerate(finalists_sorted, 1):
+                                if p.user_id == current_user.id:
+                                    tournament.my_result = i
+                                    tournament.was_in_finals = True
+                                    break
+                        else:
+                            # User was NOT in finals - show regular position
+                            if participant.final_position:
+                                tournament.my_result = participant.final_position
+                            tournament.was_in_finals = False
+                    else:
+                        # No finals - show regular position
+                        if participant.final_position:
+                            tournament.my_result = participant.final_position
+                else:
+                    tournament.my_status = "registered"
+            else:
+                tournament.my_status = None
+    else:
+        for tournament in tournaments:
+            tournament.my_status = None
+    
+    return tournaments
 
 
 @router.get("/my", response_model=List[Tournament])
@@ -88,6 +143,24 @@ async def get_tournament_details(
             participant.phone = participant.user.phone
             participant.telegram = participant.user.telegram
             participant.battlegrounds_rating = participant.user.battlegrounds_rating
+    
+    # Add finals participants if finals started
+    if tournament.with_finals and tournament.finals_started:
+        from api.crud.participant_crud import get_finals_leaderboard
+        finals_participants = get_finals_leaderboard(db, tournament_id)
+        for p in finals_participants:
+            p.battletag = p.user.battletag if p.user else None
+            p.name = p.user.name if p.user else None
+        tournament.finals = finals_participants
+    else:
+        tournament.finals = None
+    
+    # Add format info
+    tournament.format = {
+        "regular_rounds": tournament.regular_rounds or tournament.total_rounds,
+        "final_rounds": tournament.finals_games_count if tournament.with_finals else 0,
+        "finals_participants": tournament.finals_participants_count if tournament.with_finals else 0
+    }
             
     return tournament
 
@@ -99,13 +172,14 @@ async def update_tournament_details(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Update tournament (only creator can update)"""
+    """Update tournament (creator or super_admin can update)"""
     tournament = get_tournament(db, tournament_id)
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
     
-    if tournament.creator_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Only tournament creator can update")
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN
+    if tournament.creator_id != current_user.id and not is_super_admin:
+        raise HTTPException(status_code=403, detail="Only tournament creator or super admin can update")
     
     updated_tournament = update_tournament(db, tournament_id, tournament_update)
     return updated_tournament
@@ -117,22 +191,19 @@ async def delete_tournament_endpoint(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Delete tournament (only creator or admin can delete)"""
+    """Delete tournament (creator or super_admin can delete)"""
     from api.crud.tournament_crud import delete_tournament
-    from core.roles import UserRole
     
     tournament = get_tournament(db, tournament_id)
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
     
-    # Check permissions: creator or admin
-    is_admin = current_user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]
-    is_creator = tournament.creator_id == current_user.id
-    
-    if not (is_admin or is_creator):
+    # Check permissions: creator or super_admin
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN
+    if tournament.creator_id != current_user.id and not is_super_admin:
         raise HTTPException(
             status_code=403,
-            detail="Only tournament creator or admin can delete tournament"
+            detail="Only tournament creator or super admin can delete tournament"
         )
     
     # Delete tournament
@@ -150,13 +221,14 @@ async def update_lobby_maker_priority(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Update lobby maker priority list (only creator)"""
+    """Update lobby maker priority list (creator or super_admin)"""
     tournament = get_tournament(db, tournament_id)
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
     
-    if tournament.creator_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Only tournament creator can update priority list")
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN
+    if tournament.creator_id != current_user.id and not is_super_admin:
+        raise HTTPException(status_code=403, detail="Only tournament creator or super admin can update priority list")
     
     # Validate that all user_ids exist
     for user_id in priority_data.priority_list:
@@ -221,7 +293,8 @@ async def leave_tournament_endpoint(
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
     
-    if tournament.status != "registration":
+    from models.tournament import TournamentStatus as ModelTournamentStatus
+    if tournament.status != ModelTournamentStatus.REGISTRATION:
         raise HTTPException(status_code=400, detail="Cannot leave tournament after registration closes")
     
     success = leave_tournament(db, tournament_id, current_user.id)
@@ -244,15 +317,44 @@ async def get_tournament_participants_endpoint(
     return get_tournament_participants(db, tournament_id)
 
 
+@router.get("/{tournament_id}/finals-leaderboard", response_model=List[TournamentParticipant])
+async def get_finals_leaderboard_endpoint(
+    tournament_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get finals leaderboard (only top participants, sorted by finals_score)"""
+    from api.crud.participant_crud import get_finals_leaderboard
+    
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    if not tournament.with_finals:
+        raise HTTPException(status_code=400, detail="Tournament doesn't have finals")
+    
+    if not tournament.finals_started:
+        raise HTTPException(status_code=400, detail="Finals haven't started yet")
+    
+    return get_finals_leaderboard(db, tournament_id)
+
+
 @router.post("/{tournament_id}/add-participant/{user_id}", response_model=TournamentParticipant)
 async def add_participant_simple(
     tournament_id: int,
     user_id: int,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Add participant to tournament (simple version for testing)"""
+    """Add participant to tournament (only creator or admin can do this)"""
     try:
         tournament = validate_tournament_exists(db, tournament_id)
+        
+        # Check permissions: only creator or admin
+        is_admin = current_user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]
+        is_creator = tournament.creator_id == current_user.id
+        if not (is_admin or is_creator):
+            raise HTTPException(status_code=403, detail="Only tournament creator or admin can add participants")
+        
         validate_tournament_not_full(db, tournament)
         validate_user_exists(db, user_id)
         
@@ -281,7 +383,7 @@ async def add_participant_manually(
     """Manually add participant to tournament (only creator can do this)"""
     try:
         tournament = validate_tournament_exists(db, tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "add participants")
+        validate_tournament_creator(tournament, current_user.id, "add participants", current_user.role)
         validate_tournament_not_full(db, tournament)
         validate_user_exists(db, request.user_id)
         
@@ -304,13 +406,14 @@ async def remove_participant_manually(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Manually remove participant from tournament (only creator can do this)"""
+    """Manually remove participant from tournament (creator or super_admin)"""
     tournament = get_tournament(db, tournament_id)
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
     
-    if tournament.creator_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Only tournament creator can remove participants")
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN
+    if tournament.creator_id != current_user.id and not is_super_admin:
+        raise HTTPException(status_code=403, detail="Only tournament creator or super admin can remove participants")
     
     success = leave_tournament(db, tournament_id, user_id)
     if not success:
@@ -331,7 +434,7 @@ async def move_participant_between_games(
     """Move participant from one game to another (drag & drop)"""
     try:
         tournament = validate_tournament_exists(db, tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "move participants")
+        validate_tournament_creator(tournament, current_user.id, "move participants", current_user.role)
         
         if from_game_id == to_game_id:
             raise HTTPException(status_code=400, detail="Cannot move to the same game")
@@ -357,7 +460,7 @@ async def start_tournament_endpoint(
     """Start tournament (only creator can start)"""
     try:
         tournament = validate_tournament_exists(db, tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "start tournament")
+        validate_tournament_creator(tournament, current_user.id, "start tournament", current_user.role)
         
         manager = TournamentManager(tournament)
         updated_tournament = manager.start_tournament(db)
@@ -383,7 +486,7 @@ async def create_next_round_endpoint(
     """Create next round (only creator can do this)"""
     try:
         tournament = validate_tournament_exists(db, tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "create next round")
+        validate_tournament_creator(tournament, current_user.id, "create next round", current_user.role)
         
         manager = TournamentManager(tournament)
         next_round = manager.create_next_round(db)
@@ -400,6 +503,129 @@ async def create_next_round_endpoint(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@router.post("/{tournament_id}/start-finals")
+async def start_finals_endpoint(
+    tournament_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Start finals for a tournament (only creator can start)"""
+    from models.tournament import Tournament as TournamentModel
+    from models.tournament_participant import TournamentParticipant
+    from api.crud.round_crud import create_round_with_games, start_round
+    from models.game_participant import GameParticipant
+    from api.crud.game_crud import get_round_games
+    
+    tournament = validate_tournament_exists(db, tournament_id)
+    validate_tournament_creator(tournament, current_user.id, "start finals", current_user.role)
+    
+    # Validations
+    if not tournament.with_finals:
+        raise HTTPException(status_code=400, detail="Tournament doesn't have finals enabled")
+    
+    if tournament.finals_started:
+        raise HTTPException(status_code=400, detail="Finals already started")
+    
+    if tournament.current_round < tournament.regular_rounds:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Complete all regular rounds first. Current: {tournament.current_round}, Required: {tournament.regular_rounds}"
+        )
+    
+    # Check if last regular round exists and all games are completed
+    from models.tournament_round import TournamentRound, RoundStatus
+    from models.tournament_game import GameStatus
+    from api.crud.round_crud import complete_round
+    
+    last_round = db.query(TournamentRound).filter(
+        TournamentRound.tournament_id == tournament_id,
+        TournamentRound.round_number == tournament.regular_rounds
+    ).first()
+    
+    if not last_round:
+        raise HTTPException(status_code=400, detail="Last regular round not found")
+    
+    # Check if all games in last round have results
+    from api.crud.game_crud import get_game_participants
+    last_round_games = get_round_games(db, last_round.id)
+    for game in last_round_games:
+        if game.status != GameStatus.COMPLETED:
+            # Check if all participants have results
+            game_participants = get_game_participants(db, game.id)
+            all_have_results = all(
+                gp.points is not None or gp.calculated_points is not None 
+                for gp in game_participants
+            )
+            if not all_have_results:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="All games in last round must have results before starting finals"
+                )
+    
+    # Complete last round if not already completed
+    if last_round.status != RoundStatus.COMPLETED:
+        complete_round(db, last_round.id)
+    
+    # Get top N participants by total_score
+    top_participants = db.query(TournamentParticipant).filter(
+        TournamentParticipant.tournament_id == tournament_id
+    ).order_by(TournamentParticipant.total_score.desc()).limit(tournament.finals_participants_count).all()
+    
+    if len(top_participants) < tournament.finals_participants_count:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Not enough participants. Need {tournament.finals_participants_count}, have {len(top_participants)}"
+        )
+    
+    # Update tournament
+    tournament.total_rounds = tournament.regular_rounds + tournament.finals_games_count
+    tournament.finals_started = True
+    
+    # Create first final round
+    first_final_round_number = tournament.regular_rounds + 1
+    new_round = create_round_with_games(
+        db, 
+        tournament_id, 
+        first_final_round_number, 
+        tournament.finals_participants_count
+    )
+    
+    # Assign only top participants to games
+    games = get_round_games(db, new_round.id)
+    participants_per_game = 8
+    
+    for i, participant in enumerate(top_participants):
+        game_index = i // participants_per_game
+        if game_index < len(games):
+            game_participant = GameParticipant(
+                game_id=games[game_index].id,
+                participant_id=participant.id
+            )
+            db.add(game_participant)
+    
+    db.flush()
+    
+    # Assign lobby makers
+    from services.tournament_strategies import SwissStrategy
+    strategy = SwissStrategy()
+    strategy._assign_lobby_makers(db, new_round, tournament)
+    
+    # Start the round
+    start_round(db, new_round.id)
+    
+    # Update current round
+    tournament.current_round = first_final_round_number
+    
+    db.commit()
+    
+    return {
+        "message": "Finals started",
+        "current_round": tournament.current_round,
+        "total_rounds": tournament.total_rounds,
+        "finals_participants": len(top_participants)
+    }
+
+
 @router.post("/{tournament_id}/finish")
 async def finish_tournament_endpoint(
     tournament_id: int,
@@ -409,7 +635,7 @@ async def finish_tournament_endpoint(
     """Finish tournament (only creator can finish)"""
     try:
         tournament = validate_tournament_exists(db, tournament_id)
-        validate_tournament_creator(tournament, current_user.id, "finish tournament")
+        validate_tournament_creator(tournament, current_user.id, "finish tournament", current_user.role)
         
         manager = TournamentManager(tournament)
         finished_tournament = manager.finish_tournament(db)
@@ -512,14 +738,25 @@ async def get_round_games(
     # Prepare sorted games list
     sorted_games = [user_game] + other_games if user_game else games
     
+    # Determine if this is a final round
+    is_final = False
+    final_round_number = None
+    if tournament.finals_started and tournament.regular_rounds and round_number > tournament.regular_rounds:
+        is_final = True
+        final_round_number = round_number - tournament.regular_rounds
+    
     # Return tournament info with games
     return {
         "tournament": {
             "id": tournament.id,
             "current_round": tournament.current_round,
             "total_rounds": tournament.total_rounds,
+            "regular_rounds": tournament.regular_rounds,
             "status": tournament.status.value,
-            "all_games_completed": all_games_completed
+            "all_games_completed": all_games_completed,
+            "with_finals": tournament.with_finals,
+            "finals_started": tournament.finals_started,
+            "finals_games_count": tournament.finals_games_count
         },
         "round": {
             "id": round_obj.id,
@@ -527,7 +764,9 @@ async def get_round_games(
             "status": round_obj.status.value,
             "created_at": round_obj.created_at,
             "started_at": round_obj.started_at,
-            "completed_at": round_obj.completed_at
+            "completed_at": round_obj.completed_at,
+            "is_final": is_final,
+            "final_round_number": final_round_number
         },
         "games": sorted_games
     }

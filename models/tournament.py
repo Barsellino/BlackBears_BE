@@ -40,6 +40,13 @@ class Tournament(Base):
     prizes = Column(JSON, nullable=True)  # List of prize descriptions
     first_round_strategy = Column(String, default="RANDOM")  # RANDOM, BALANCED, STRONG_VS_STRONG
     
+    # Finals settings
+    with_finals = Column(Boolean, default=False, nullable=False)
+    finals_games_count = Column(Integer, nullable=True)  # How many games in finals
+    finals_participants_count = Column(Integer, nullable=True)  # How many top players go to finals
+    regular_rounds = Column(Integer, nullable=True)  # Original rounds count (before finals)
+    finals_started = Column(Boolean, default=False, nullable=False)  # Whether finals have started
+    
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

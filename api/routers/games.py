@@ -88,7 +88,7 @@ async def clear_game_results(
     # Validate tournament creator
     tournament = validate_tournament_exists(db, game.tournament_id)
     games_service.validate_tournament_not_finished(tournament)
-    validate_tournament_creator(tournament, current_user.id, "clear game results")
+    validate_tournament_creator(tournament, current_user.id, "clear game results", current_user.role)
     
     try:
         cleared_count = games_service.clear_game_results_logic(db, game_id, game)
@@ -157,6 +157,7 @@ async def clear_participant_result(
     # Validate tournament exists
     tournament = validate_tournament_exists(db, game.tournament_id)
     games_service.validate_tournament_not_finished(tournament)
+    games_service.validate_round_not_completed(db, game)
 
     # Validate permissions
     # Allow if:

@@ -39,6 +39,7 @@ class TournamentStrategy(ABC):
         pass
 
 
+
 class SwissStrategy(TournamentStrategy):
     """Swiss System tournament strategy"""
     
@@ -80,7 +81,9 @@ class SwissStrategy(TournamentStrategy):
     def can_create_next_round(self, db: Session, tournament: Tournament) -> bool:
         """Check if all games in current round are completed"""
         
-        if tournament.current_round >= tournament.total_rounds:
+        max_rounds = tournament.total_rounds
+        
+        if tournament.current_round >= max_rounds:
             return False  # Tournament is finished
         
         # Get current round
@@ -112,7 +115,7 @@ class SwissStrategy(TournamentStrategy):
         return True
     
     def create_next_round(self, db: Session, tournament: Tournament) -> TournamentRound:
-        """Create next round with Swiss system pairing"""
+        """Create next round with Swiss system pairing OR Finals"""
         
         if not self.can_create_next_round(db, tournament):
             raise InvalidTournamentState("create next round - current round not completed")
@@ -130,16 +133,32 @@ class SwissStrategy(TournamentStrategy):
         next_round_number = tournament.current_round + 1
         tournament.current_round = next_round_number
         
-        # Create next round
-        next_round = create_round_with_games(db, tournament.id, next_round_number, tournament.total_participants)
+        # Check if we are in finals mode
+        is_finals_round = tournament.finals_started and tournament.regular_rounds and next_round_number > tournament.regular_rounds
         
-        # Get participants sorted by total score (Swiss pairing)
-        participants = db.query(TournamentParticipant).filter(
-            TournamentParticipant.tournament_id == tournament.id
-        ).order_by(TournamentParticipant.total_score.desc()).all()
-        
-        # Assign participants to games based on current standings
-        self._assign_participants_by_score(db, next_round, participants, tournament)
+        if is_finals_round:
+            # FINALS LOGIC: Only top participants
+            participants_count = tournament.finals_participants_count or 8
+            next_round = create_round_with_games(db, tournament.id, next_round_number, participants_count)
+            
+            # Get top participants (same as in start-finals)
+            participants = db.query(TournamentParticipant).filter(
+                TournamentParticipant.tournament_id == tournament.id
+            ).order_by(TournamentParticipant.total_score.desc()).limit(participants_count).all()
+            
+            # Assign participants randomly for finals
+            self._assign_participants_randomly(db, next_round, participants, tournament)
+        else:
+            # SWISS LOGIC: All participants
+            next_round = create_round_with_games(db, tournament.id, next_round_number, tournament.total_participants)
+            
+            # Get participants sorted by total score
+            participants = db.query(TournamentParticipant).filter(
+                TournamentParticipant.tournament_id == tournament.id
+            ).order_by(TournamentParticipant.total_score.desc()).all()
+            
+            # Assign participants based on strategy
+            self._assign_participants_by_score(db, next_round, participants, tournament)
         
         # Start the round
         start_round(db, next_round.id)
@@ -151,7 +170,14 @@ class SwissStrategy(TournamentStrategy):
     def finish_tournament(self, db: Session, tournament: Tournament) -> Tournament:
         """Finish Swiss tournament and calculate final positions"""
         
-        if tournament.current_round < tournament.total_rounds:
+        # Check if finals should be started first
+        if tournament.with_finals and not tournament.finals_started:
+            raise InvalidTournamentState("finish tournament - finals not started yet. Call /start-finals first")
+        
+        max_rounds = tournament.total_rounds
+            
+        # 1. Check if all rounds are completed
+        if tournament.current_round < max_rounds:
             raise InvalidTournamentState("finish tournament - not all rounds completed")
         
         # Check if all games in final round are completed
@@ -174,16 +200,11 @@ class SwissStrategy(TournamentStrategy):
                     if gp.points is None:
                         raise InvalidTournamentState("finish tournament - not all results submitted")
         
-        # Complete final round
-        final_round = db.query(TournamentRound).filter(
-            TournamentRound.tournament_id == tournament.id,
-            TournamentRound.round_number == tournament.current_round
-        ).first()
-        
-        if final_round:
+        # Complete final round if needed
+        if final_round and final_round.status != RoundStatus.COMPLETED:
             complete_round(db, final_round.id)
-        
-        # Update final positions based on total scores
+            
+        # 3. Calculate final positions
         from api.crud.participant_crud import update_final_positions
         update_final_positions(db, tournament.id)
         

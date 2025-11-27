@@ -30,6 +30,31 @@ def validate_tournament_not_finished(tournament: Tournament):
         )
 
 
+def validate_round_not_completed(db: Session, game: TournamentGame):
+    """Перевірка що наступний раунд ще не створено"""
+    from models.tournament_round import TournamentRound
+    
+    # Get current round
+    current_round = db.query(TournamentRound).filter(
+        TournamentRound.id == game.round_id
+    ).first()
+    
+    if not current_round:
+        return
+    
+    # Check if next round exists
+    next_round = db.query(TournamentRound).filter(
+        TournamentRound.tournament_id == current_round.tournament_id,
+        TournamentRound.round_number == current_round.round_number + 1
+    ).first()
+    
+    if next_round:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot modify results - next round has already been created"
+        )
+
+
 
 def validate_lobby_maker_assigned(game: TournamentGame):
     """Перевірка що Lobby Maker призначений"""
@@ -73,13 +98,15 @@ def submit_game_results_logic(
     user: User,
     tournament: Tournament
 ):
+    game = get_tournament_game(db, game_id)
+    validate_round_not_completed(db, game)
+    
     if not can_submit_game_results(db, game_id, tournament.id, user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have permission to submit results for this game"
         )
     
-    game = get_tournament_game(db, game_id)
     validate_lobby_maker_assigned(game)
     
     # Get current game participants
@@ -128,6 +155,9 @@ def clear_game_results_logic(
     game_id: int,
     game: TournamentGame
 ):
+    # Check if round is completed
+    validate_round_not_completed(db, game)
+    
     # Check if game is completed
     if game.status == GameStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Cannot clear results of completed game")
@@ -162,6 +192,9 @@ def submit_participant_result_logic(
     tournament: Tournament,
     game: TournamentGame
 ):
+    # Check if round is completed
+    validate_round_not_completed(db, game)
+    
     if not can_submit_game_results(db, game_id, tournament.id, user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -258,6 +291,9 @@ def submit_positions_batch_logic(
     tournament: Tournament,
     game: TournamentGame
 ):
+    # Check if round is completed
+    validate_round_not_completed(db, game)
+    
     if not can_submit_game_results(db, game_id, tournament.id, user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -440,6 +476,9 @@ def submit_participant_position_logic(
     tournament: Tournament,
     game: TournamentGame
 ):
+    # Check if round is completed
+    validate_round_not_completed(db, game)
+    
     # Validate positions
     if not positions or len(positions) > 8:
         raise HTTPException(status_code=400, detail="Positions must be 1-8 items")

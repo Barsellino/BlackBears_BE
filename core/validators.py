@@ -25,9 +25,14 @@ def validate_user_exists(db: Session, user_id: int) -> User:
     return user
 
 
-def validate_tournament_creator(tournament: Tournament, user_id: int, action: str = "perform this action"):
-    """Validate user is tournament creator"""
-    if tournament.creator_id != user_id:
+def validate_tournament_creator(tournament: Tournament, user_id: int, action: str = "perform this action", user_role: str = None):
+    """Validate user is tournament creator or super_admin"""
+    from core.roles import UserRole
+    
+    is_creator = tournament.creator_id == user_id
+    is_super_admin = user_role == UserRole.SUPER_ADMIN if user_role else False
+    
+    if not is_creator and not is_super_admin:
         raise UnauthorizedAction(action)
 
 
