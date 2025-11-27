@@ -55,12 +55,13 @@ class TournamentBase(BaseModel):
     # Finals settings
     with_finals: bool = False
     finals_games_count: Optional[int] = Field(None, ge=1, le=10, description="Number of games in finals")
-    finals_participants_count: Optional[int] = Field(None, ge=8, le=16, description="Number of participants in finals (8 or 16)")
+    finals_participants_count: Optional[int] = Field(None, ge=8, le=64, description="Number of participants in finals (8-64)")
 
     @validator('registration_deadline', pre=True)
     def parse_registration_deadline(cls, v):
         if v == "" or v is None:
             return None
+        return v
     
     @validator('total_rounds')
     def validate_rounds(cls, v, values):
