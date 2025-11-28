@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from core.exceptions import TournamentException
 from core.middleware import ActivityTrackingMiddleware
+from core.rate_limit import RateLimitMiddleware
 
 from db import Base, engine
 from core.config import settings
@@ -28,6 +29,9 @@ from api.routers.premium import router as premium_router
 
 
 app = FastAPI(title="Game API", version="1.0.0")
+
+# Rate limiting middleware (має бути першим для захисту від DDoS)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=150, requests_per_hour=2100)
 
 # Activity tracking middleware (має бути перед CORS)
 app.add_middleware(ActivityTrackingMiddleware)

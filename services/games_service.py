@@ -21,6 +21,35 @@ from schemas.tournament import GameParticipantUpdate
 from schemas.game_results_v2 import calculate_points_from_positions
 
 
+def log_game_action(
+    db: Session,
+    game_id: int,
+    user_id: int,
+    action_type: str,
+    action_description: str
+):
+    """Helper функція для асинхронного логування дій в грі"""
+    import threading
+    from db import SessionLocal
+    
+    def _log_async():
+        """Асинхронне логування в окремій сесії"""
+        try:
+            log_db = SessionLocal()
+            try:
+                from api.crud.game_log_crud import create_game_log
+                create_game_log(log_db, game_id, user_id, action_type, action_description)
+            finally:
+                log_db.close()
+        except Exception:
+            # Не падаємо якщо логування не вдалось
+            pass
+    
+    # Запускаємо в окремому потоці
+    thread = threading.Thread(target=_log_async, daemon=True)
+    thread.start()
+
+
 def validate_tournament_not_finished(tournament: Tournament):
     """Перевірка що турнір не завершений"""
     if tournament.status == TournamentStatus.FINISHED:
@@ -181,6 +210,46 @@ def clear_game_results_logic(
     db.commit()
     
     return cleared_count
+
+
+def clear_participant_result_logic(
+    db: Session,
+    game_id: int,
+    participant_id: int,
+    game: TournamentGame
+):
+    """Clear result for specific participant"""
+    from api.crud.participant_crud import get_participant
+    
+    game_participants = get_game_participants(db, game_id)
+    game_participant = next(
+        (gp for gp in game_participants if gp.participant_id == participant_id),
+        None
+    )
+    
+    if not game_participant:
+        raise HTTPException(status_code=404, detail="Participant not found in this game")
+    
+    # Get old values for logging
+    old_positions = json.loads(game_participant.positions) if game_participant.positions else None
+    old_points = game_participant.points
+    
+    # Get participant battletag for logging
+    participant = get_participant(db, participant_id)
+    participant_battletag = participant.user.battletag if participant and participant.user else "Unknown"
+    
+    # Clear results
+    game_participant.positions = None
+    game_participant.points = None
+    game_participant.calculated_points = None
+    
+    # Recalculate participant's total score
+    update_participant_total_score(db, participant_id)
+    
+    db.commit()
+    
+    # Log the action (need user from context, will be passed from router)
+    # This will be called from router with user context
 
 
 def submit_participant_result_logic(
@@ -514,6 +583,15 @@ def submit_participant_position_logic(
     if not game_participant:
         raise HTTPException(status_code=404, detail="Participant not found in this game")
     
+    # Get old values for logging
+    old_positions = json.loads(game_participant.positions) if game_participant.positions else None
+    old_points = game_participant.points
+    
+    # Get participant battletag for logging
+    from api.crud.participant_crud import get_participant
+    participant = get_participant(db, participant_id)
+    participant_battletag = participant.user.battletag if participant and participant.user else "Unknown"
+    
     # Calculate points and update
     calculated_points = calculate_points_from_positions(positions)
     game_participant.positions = json.dumps(sorted(positions))
@@ -538,6 +616,13 @@ def submit_participant_position_logic(
     # Commit changes first before recalculating total score
     db.commit()
     db.refresh(game_participant)
+    
+    # Log the action
+    old_pos_str = f"position {old_positions}" if old_positions else "no position"
+    new_pos_str = f"position {sorted(positions)}"
+    
+    description = f"changed results for player {participant_battletag} from {old_pos_str} to {new_pos_str}"
+    log_game_action(db, game_id, user.id, "position_set", description)
     
     # Now recalculate total score after commit
     update_participant_total_score(db, participant_id)
@@ -582,6 +667,13 @@ def assign_lobby_maker_logic(
     if not participant:
         raise HTTPException(status_code=404, detail="Participant not found")
         
+    # Get old lobby maker for logging
+    old_lobby_maker_id = game.lobby_maker_id
+    old_lobby_maker_battletag = None
+    if old_lobby_maker_id:
+        old_lobby_maker = db.query(User).filter(User.id == old_lobby_maker_id).first()
+        old_lobby_maker_battletag = old_lobby_maker.battletag if old_lobby_maker else "Unknown"
+    
     # Update game lobby maker
     game.lobby_maker_id = participant.user_id
     
@@ -591,6 +683,14 @@ def assign_lobby_maker_logic(
         
     db.commit()
     db.refresh(game)
+    
+    # Log the action
+    new_lobby_maker_battletag = participant.user.battletag if participant.user else "Unknown"
+    if old_lobby_maker_id:
+        description = f"changed lobby maker from {old_lobby_maker_battletag} to {new_lobby_maker_battletag}"
+    else:
+        description = f"assigned lobby maker {new_lobby_maker_battletag}"
+    log_game_action(db, game_id, user.id, "lobby_maker_assigned", description)
     
     return {
         "game_id": game_id,
@@ -630,6 +730,13 @@ def remove_lobby_maker_logic(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot remove Lobby Maker: results have already been submitted"
         )
+    
+    # Get old lobby maker for logging
+    old_lobby_maker_id = game.lobby_maker_id
+    old_lobby_maker_battletag = None
+    if old_lobby_maker_id:
+        old_lobby_maker = db.query(User).filter(User.id == old_lobby_maker_id).first()
+        old_lobby_maker_battletag = old_lobby_maker.battletag if old_lobby_maker else "Unknown"
         
     game.lobby_maker_id = None
     
@@ -638,6 +745,11 @@ def remove_lobby_maker_logic(
         gp.is_lobby_maker = False
         
     db.commit()
+    
+    # Log the action
+    if old_lobby_maker_battletag:
+        description = f"removed lobby maker {old_lobby_maker_battletag}"
+        log_game_action(db, game_id, user.id, "lobby_maker_removed", description)
     
     return {"message": "Lobby Maker removed successfully"}
 

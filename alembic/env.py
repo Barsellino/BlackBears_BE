@@ -21,6 +21,8 @@ from models.tournament_participant import TournamentParticipant
 from models.tournament_round import TournamentRound
 from models.tournament_game import TournamentGame
 from models.game_participant import GameParticipant
+from models.game_log import GameLog
+from models.tournament_log import TournamentLog
 
 load_dotenv()
 

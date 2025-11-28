@@ -197,7 +197,32 @@ async def clear_participant_result(
         raise UnauthorizedAction("clear participant result")
     
     try:
+        # Get participant info for logging
+        from api.crud.participant_crud import get_participant
+        participant = get_participant(db, participant_id)
+        participant_battletag = participant.user.battletag if participant and participant.user else "Unknown"
+        
+        # Get old values before clearing
+        from api.crud.game_crud import get_game_participants
+        game_participants = get_game_participants(db, game_id)
+        game_participant = next(
+            (gp for gp in game_participants if gp.participant_id == participant_id),
+            None
+        )
+        
+        old_positions = None
+        old_points = None
+        if game_participant:
+            import json
+            old_positions = json.loads(game_participant.positions) if game_participant.positions else None
+            old_points = game_participant.points
+        
         games_service.clear_participant_result_logic(db, game_id, participant_id, game)
+        
+        # Log the action
+        old_pos_str = f"position {old_positions}" if old_positions else "no position"
+        description = f"cleared results for player {participant_battletag} ({old_pos_str})"
+        games_service.log_game_action(db, game_id, current_user.id, "position_cleared", description)
         
         return {
             "message": "Participant result cleared",
@@ -408,3 +433,40 @@ async def get_lobby_maker(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/{game_id}/logs")
+async def get_game_logs(
+    game_id: int,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """Get game logs with pagination"""
+    from api.crud.game_log_crud import get_game_logs, get_game_logs_count
+    from api.crud.game_crud import get_tournament_game
+    
+    # Validate game exists
+    game = get_tournament_game(db, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    logs = get_game_logs(db, game_id, skip=skip, limit=limit)
+    total = get_game_logs_count(db, game_id)
+    
+    return {
+        "logs": [
+            {
+                "id": log.id,
+                "user_battletag": log.user_battletag,
+                "user_role": log.user_role,
+                "action_type": log.action_type,
+                "action_description": log.action_description,
+                "created_at": log.created_at.isoformat() + "Z"
+            }
+            for log in logs
+        ],
+        "total": total,
+        "skip": skip,
+        "limit": limit
+    }

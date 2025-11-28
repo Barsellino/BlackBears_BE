@@ -4,6 +4,35 @@ from services.tournament_strategies import SwissStrategy, TournamentStrategy
 from core.exceptions import InvalidTournamentState
 
 
+def log_tournament_action(
+    db: Session,
+    tournament_id: int,
+    user_id: int,
+    action_type: str,
+    action_description: str
+):
+    """Helper функція для асинхронного логування дій в турнірі"""
+    import threading
+    from db import SessionLocal
+    
+    def _log_async():
+        """Асинхронне логування в окремій сесії"""
+        try:
+            log_db = SessionLocal()
+            try:
+                from api.crud.tournament_log_crud import create_tournament_log
+                create_tournament_log(log_db, tournament_id, user_id, action_type, action_description)
+            finally:
+                log_db.close()
+        except Exception:
+            # Не падаємо якщо логування не вдалось
+            pass
+    
+    # Запускаємо в окремому потоці
+    thread = threading.Thread(target=_log_async, daemon=True)
+    thread.start()
+
+
 class TournamentManager:
     """Main tournament manager using strategy pattern"""
     

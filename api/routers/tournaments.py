@@ -275,6 +275,16 @@ async def join_tournament_endpoint(
             from core.exceptions import AlreadyJoined
             raise AlreadyJoined()
         
+        # Log the action
+        from services.tournament_manager import log_tournament_action
+        log_tournament_action(
+            db, 
+            tournament_id, 
+            current_user.id, 
+            "participant_joined",
+            f"joined tournament {tournament.name}"
+        )
+        
         return participant
     except TournamentException:
         raise
@@ -300,6 +310,16 @@ async def leave_tournament_endpoint(
     success = leave_tournament(db, tournament_id, current_user.id)
     if not success:
         raise HTTPException(status_code=400, detail="Not participating in this tournament")
+    
+    # Log the action
+    from services.tournament_manager import log_tournament_action
+    log_tournament_action(
+        db, 
+        tournament_id, 
+        current_user.id, 
+        "participant_left",
+        f"left tournament {tournament.name}"
+    )
     
     return {"message": "Successfully left tournament"}
 
@@ -521,6 +541,16 @@ async def start_tournament_endpoint(
         manager = TournamentManager(tournament)
         updated_tournament = manager.start_tournament(db)
         
+        # Log the action
+        from services.tournament_manager import log_tournament_action
+        log_tournament_action(
+            db, 
+            tournament_id, 
+            current_user.id, 
+            "tournament_started",
+            f"started tournament {tournament.name}"
+        )
+        
         return {
             "message": "Tournament started successfully",
             "tournament_id": tournament_id,
@@ -546,6 +576,18 @@ async def create_next_round_endpoint(
         
         manager = TournamentManager(tournament)
         next_round = manager.create_next_round(db)
+        
+        # Log the action
+        from services.tournament_manager import log_tournament_action
+        is_final = tournament.finals_started and next_round.round_number > tournament.regular_rounds
+        round_name = f"Final {next_round.round_number - tournament.regular_rounds}" if is_final else f"Round {next_round.round_number}"
+        log_tournament_action(
+            db, 
+            tournament_id, 
+            current_user.id, 
+            "next_round_created",
+            f"created {round_name}"
+        )
         
         return {
             "message": "Next round created successfully",
@@ -674,6 +716,16 @@ async def start_finals_endpoint(
     
     db.commit()
     
+    # Log the action
+    from services.tournament_manager import log_tournament_action
+    log_tournament_action(
+        db, 
+        tournament_id, 
+        current_user.id, 
+        "finals_started",
+        f"started finals with {len(top_participants)} participants"
+    )
+    
     return {
         "message": "Finals started",
         "current_round": tournament.current_round,
@@ -696,6 +748,16 @@ async def finish_tournament_endpoint(
         manager = TournamentManager(tournament)
         finished_tournament = manager.finish_tournament(db)
         
+        # Log the action
+        from services.tournament_manager import log_tournament_action
+        log_tournament_action(
+            db, 
+            tournament_id, 
+            current_user.id, 
+            "tournament_finished",
+            f"finished tournament {tournament.name}"
+        )
+        
         return {
             "message": "Tournament finished successfully",
             "tournament_id": tournament_id,
@@ -706,6 +768,124 @@ async def finish_tournament_endpoint(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/{tournament_id}/logs")
+async def get_tournament_logs(
+    tournament_id: int,
+    skip: int = 0,
+    limit: int = 50,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all logs for tournament (participants can view)"""
+    from core.roles import UserRole
+    from models.tournament_round import TournamentRound
+    from models.tournament_game import TournamentGame
+    from api.crud.game_log_crud import get_game_logs, get_game_logs_count
+    from models.tournament_participant import TournamentParticipant
+    
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    # Check permissions: admin, super_admin, or tournament participant
+    is_admin = current_user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]
+    is_creator = tournament.creator_id == current_user.id
+    is_participant = db.query(TournamentParticipant).filter(
+        TournamentParticipant.tournament_id == tournament_id,
+        TournamentParticipant.user_id == current_user.id
+    ).first() is not None
+    
+    if not (is_admin or is_creator or is_participant):
+        raise HTTPException(status_code=403, detail="Only tournament participants can view tournament logs")
+    
+    # Get all games for this tournament
+    rounds = db.query(TournamentRound).filter(
+        TournamentRound.tournament_id == tournament_id
+    ).all()
+    
+    round_ids = [r.id for r in rounds]
+    games = db.query(TournamentGame).filter(
+        TournamentGame.round_id.in_(round_ids)
+    ).all()
+    
+    game_ids = [g.id for g in games]
+    
+    if not game_ids:
+        return {
+            "logs": [],
+            "total": 0,
+            "skip": skip,
+            "limit": limit
+        }
+    
+    # Get all logs from all games
+    from models.game_log import GameLog
+    game_logs = []
+    if game_ids:
+        game_logs = db.query(GameLog).filter(
+            GameLog.game_id.in_(game_ids)
+        ).all()
+    
+    # Get tournament logs
+    from models.tournament_log import TournamentLog
+    tournament_logs = db.query(TournamentLog).filter(
+        TournamentLog.tournament_id == tournament_id
+    ).all()
+    
+    # Combine and sort by date
+    all_logs = []
+    for log in game_logs:
+        all_logs.append({
+            "type": "game",
+            "id": log.id,
+            "game_id": log.game_id,
+            "user_battletag": log.user_battletag,
+            "user_role": log.user_role,
+            "action_type": log.action_type,
+            "action_description": log.action_description,
+            "created_at": log.created_at
+        })
+    
+    for log in tournament_logs:
+        all_logs.append({
+            "type": "tournament",
+            "id": log.id,
+            "game_id": None,
+            "user_battletag": log.user_battletag,
+            "user_role": log.user_role,
+            "action_type": log.action_type,
+            "action_description": log.action_description,
+            "created_at": log.created_at
+        })
+    
+    # Sort by created_at DESC
+    all_logs.sort(key=lambda x: x["created_at"], reverse=True)
+    
+    total = len(all_logs)
+    
+    # Apply pagination
+    paginated_logs = all_logs[skip:skip + limit]
+    
+    return {
+        "logs": [
+            {
+                "id": log["id"],
+                "type": log["type"],
+                "game_id": log["game_id"],
+                "user_battletag": log["user_battletag"],
+                "user_role": log["user_role"],
+                "action_type": log["action_type"],
+                "action_description": log["action_description"],
+                "created_at": log["created_at"].isoformat() + "Z"
+            }
+            for log in paginated_logs
+        ],
+        "total": total,
+        "skip": skip,
+        "limit": limit
+    }
 
 
 @router.get("/{tournament_id}/status")
