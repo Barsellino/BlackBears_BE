@@ -551,6 +551,11 @@ async def start_tournament_endpoint(
             f"started tournament {tournament.name}"
         )
         
+        # Send WebSocket notification
+        from services.notification_service import notify_tournament_started
+        import asyncio
+        asyncio.create_task(notify_tournament_started(tournament_id, updated_tournament.current_round))
+        
         return {
             "message": "Tournament started successfully",
             "tournament_id": tournament_id,
@@ -588,6 +593,12 @@ async def create_next_round_endpoint(
             "next_round_created",
             f"created {round_name}"
         )
+        
+        # Send WebSocket notification
+        from services.notification_service import notify_round_started
+        import asyncio
+        final_round_number = next_round.round_number - tournament.regular_rounds if is_final else None
+        asyncio.create_task(notify_round_started(tournament_id, next_round.round_number, is_final, final_round_number))
         
         return {
             "message": "Next round created successfully",
@@ -726,6 +737,11 @@ async def start_finals_endpoint(
         f"started finals with {len(top_participants)} participants"
     )
     
+    # Send WebSocket notification
+    from services.notification_service import notify_finals_started
+    import asyncio
+    asyncio.create_task(notify_finals_started(tournament_id, first_final_round_number, len(top_participants)))
+    
     return {
         "message": "Finals started",
         "current_round": tournament.current_round,
@@ -757,6 +773,11 @@ async def finish_tournament_endpoint(
             "tournament_finished",
             f"finished tournament {tournament.name}"
         )
+        
+        # Send WebSocket notification
+        from services.notification_service import notify_tournament_finished
+        import asyncio
+        asyncio.create_task(notify_tournament_finished(tournament_id))
         
         return {
             "message": "Tournament finished successfully",

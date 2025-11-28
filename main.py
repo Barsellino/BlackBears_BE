@@ -26,6 +26,7 @@ from api.routers.games import router as games_router
 from api.routers.stats import router as stats_router
 from api.routers.admin import router as admin_router
 from api.routers.premium import router as premium_router
+from api.routers.websocket import router as websocket_router
 
 
 app = FastAPI(title="Game API", version="1.0.0")
@@ -110,5 +111,6 @@ app.include_router(games_router)
 app.include_router(stats_router)
 app.include_router(admin_router)
 app.include_router(premium_router)
+app.include_router(websocket_router)
 
 
