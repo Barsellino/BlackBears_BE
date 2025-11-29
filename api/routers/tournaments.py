@@ -127,39 +127,72 @@ async def get_tournament_details(
         raise HTTPException(status_code=404, detail="Tournament not found")
     
     # Check if user has access to sensitive data
-    has_access = False
+    has_full_access = False
+    import logging
+    logger = logging.getLogger(__name__)
+    
     if current_user:
-        is_admin = current_user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]
+        # Порівнюємо enum значення правильно
+        is_admin = current_user.role == UserRole.ADMIN or current_user.role == UserRole.SUPER_ADMIN
         is_creator = tournament.creator_id == current_user.id
-        has_access = is_admin or is_creator
+        has_full_access = is_admin or is_creator
+        # Логування для діагностики
+        logger.info(f"get_tournament_details: current_user_id={current_user.id}, current_user_role={current_user.role}, current_user_role_value={current_user.role.value if hasattr(current_user.role, 'value') else current_user.role}, tournament_creator_id={tournament.creator_id}, is_admin={is_admin}, is_creator={is_creator}, has_full_access={has_full_access}")
+    else:
+        logger.info(f"get_tournament_details: current_user is None (no token or invalid token)")
         
     # Calculate finalist status (already done in get_tournament, but ensure it's set)
     from api.crud.tournament_crud import _calculate_finalist_status
     original_finalist_ids, actual_finalist_ids = _calculate_finalist_status(db, tournament)
-    
+        
     # Populate participant details
     for participant in tournament.participants:
-        # Always set public info
-        participant.battletag = participant.user.battletag
-        participant.name = participant.user.name
+        # Перевіряємо, чи user завантажений
+        if not participant.user:
+            # Якщо user не завантажений, завантажуємо його
+            from models.user import User as UserModel
+            participant.user = db.query(UserModel).filter(UserModel.id == participant.user_id).first()
         
-        # Mark finalist status (only for tournaments with finals)
-        if tournament.with_finals and tournament.finals_started:
-            participant.was_original_finalist = participant.id in original_finalist_ids
-            participant.is_swapped_finalist = (
-                participant.id in actual_finalist_ids and
-                participant.id not in original_finalist_ids
-            )
-            participant.plays_in_finals = participant.id in actual_finalist_ids
+        if participant.user:
+            # Always set public info
+            participant.battletag = participant.user.battletag
+            participant.name = participant.user.name
+            
+            # Mark finalist status (only for tournaments with finals)
+            if tournament.with_finals and tournament.finals_started:
+                participant.was_original_finalist = participant.id in original_finalist_ids
+                participant.is_swapped_finalist = (
+                    participant.id in actual_finalist_ids and
+                    participant.id not in original_finalist_ids
+                )
+                participant.plays_in_finals = participant.id in actual_finalist_ids
+            else:
+                participant.was_original_finalist = False
+                participant.is_swapped_finalist = False
+                participant.plays_in_finals = False
+            
+            # Set sensitive data (phone, telegram, rating)
+            # Show for admin/creator (full access) or for user's own participant
+            is_own_participant = current_user and participant.user_id == current_user.id
+            if has_full_access or is_own_participant:
+                participant.phone = participant.user.phone
+                participant.telegram = participant.user.telegram
+                participant.battlegrounds_rating = participant.user.battlegrounds_rating
+                # Логування для діагностики
+                logger.info(f"get_tournament_details: participant_id={participant.id}, user_id={participant.user_id}, phone={participant.user.phone}, telegram={participant.user.telegram}, has_full_access={has_full_access}, is_own_participant={is_own_participant}")
+            else:
+                # Explicitly set to None if no access (for security)
+                participant.phone = None
+                participant.telegram = None
+                participant.battlegrounds_rating = None
+                logger.info(f"get_tournament_details: participant_id={participant.id}, user_id={participant.user_id}, NO ACCESS - phone/telegram set to None, has_full_access={has_full_access}, is_own_participant={is_own_participant}")
         else:
-            participant.was_original_finalist = False
-            participant.is_swapped_finalist = False
-            participant.plays_in_finals = False
-        
-        if has_access:
-            participant.phone = participant.user.phone
-            participant.telegram = participant.user.telegram
-            participant.battlegrounds_rating = participant.user.battlegrounds_rating
+            # Якщо user не знайдено, встановлюємо всі поля в None
+            participant.battletag = None
+            participant.name = None
+            participant.phone = None
+            participant.telegram = None
+            participant.battlegrounds_rating = None
     
     # Add finals participants if finals started
     if tournament.with_finals and tournament.finals_started:

@@ -99,7 +99,18 @@ def get_current_user_optional(
         return None
     
     try:
-        payload = jwt.decode(credentials.credentials, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+            audience="blackbears-frontend"
+        )
+        
+        # Перевірка issuer
+        issuer = payload.get("iss")
+        if issuer != "blackbears-backend":
+            return None
+        
         user_id: int = payload.get("sub")
         if user_id is None:
             return None
