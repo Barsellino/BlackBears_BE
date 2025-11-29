@@ -50,6 +50,25 @@ def log_game_action(
     thread.start()
 
 
+def send_websocket_notification_async(notification_func, **kwargs):
+    """Helper функція для асинхронного виклику WebSocket повідомлень"""
+    import threading
+    import asyncio
+    
+    def _send_async():
+        """Асинхронна відправка WebSocket повідомлення"""
+        try:
+            asyncio.run(notification_func(**kwargs))
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error sending WebSocket notification: {e}")
+    
+    # Запускаємо в окремому потоці
+    thread = threading.Thread(target=_send_async, daemon=True)
+    thread.start()
+
+
 def validate_tournament_not_finished(tournament: Tournament):
     """Перевірка що турнір не завершений"""
     if tournament.status == TournamentStatus.FINISHED:
@@ -150,6 +169,12 @@ def submit_game_results_logic(
                 detail=f"Participant {result.participant_id} is not in this game"
             )
     
+    # Get round info for WebSocket
+    from models.tournament_round import TournamentRound
+    round_obj = db.query(TournamentRound).filter(TournamentRound.id == game.round_id).first()
+    round_number = round_obj.round_number if round_obj else 1
+    is_final = tournament.finals_started and tournament.regular_rounds and round_number > tournament.regular_rounds
+    
     # Update results for each participant
     updated_count = 0
     for result in results_data.results:
@@ -171,10 +196,88 @@ def submit_game_results_logic(
     
     # Mark game as completed if all participants have results
     game = get_tournament_game(db, game_id)
-    if len(results_data.results) == len(game_participants):
+    all_have_results = len(results_data.results) == len(game_participants)
+    if all_have_results:
         game.status = GameStatus.COMPLETED
         game.finished_at = func.now()
         db.commit()
+    
+    # Send WebSocket notifications
+    from services.notification_service import notify_game_result_updated, notify_position_updated, notify_game_completed
+    from models.tournament_participant import TournamentParticipant
+    from api.crud.participant_crud import get_participant
+    
+    # Refresh game participants to get updated data
+    db.refresh(game)
+    game_participants = get_game_participants(db, game_id)
+    
+    for result in results_data.results:
+        game_participant = next(
+            (gp for gp in game_participants if gp.participant_id == result.participant_id),
+            None
+        )
+        
+        if not game_participant:
+            continue
+        
+        # Get participant info
+        participant = get_participant(db, result.participant_id)
+        participant_battletag = participant.user.battletag if participant and participant.user else "Unknown"
+        
+        # Parse positions from JSON if exists
+        positions = None
+        if game_participant.positions:
+            try:
+                positions = json.loads(game_participant.positions)
+            except:
+                positions = None
+        
+        # Send game_result_updated
+        send_websocket_notification_async(
+            notify_game_result_updated,
+            tournament_id=tournament.id,
+            game_id=game_id,
+            round_number=round_number,
+            is_final=is_final,
+            game_participant_id=game_participant.id,
+            participant_id=result.participant_id,
+            user_id=participant.user_id if participant else None,
+            battletag=participant_battletag,
+            positions=positions,
+            calculated_points=game_participant.calculated_points,
+            is_lobby_maker=game_participant.is_lobby_maker,
+            game_status=game.status.value if game.status else "active",
+            db=None
+        )
+        
+        # Get updated participant for position_updated
+        updated_participant = db.query(TournamentParticipant).filter(
+            TournamentParticipant.id == result.participant_id
+        ).first()
+        
+        # Send position_updated
+        if updated_participant:
+            send_websocket_notification_async(
+                notify_position_updated,
+                tournament_id=tournament.id,
+                participant_id=result.participant_id,
+                user_id=updated_participant.user_id,
+                total_score=updated_participant.total_score or 0.0,
+                final_position=updated_participant.final_position,
+                db=None
+            )
+    
+    # Send game_completed if all results submitted
+    if all_have_results:
+        from services.notification_service import notify_game_completed
+        send_websocket_notification_async(
+            notify_game_completed,
+            tournament_id=tournament.id,
+            game_id=game_id,
+            round_number=round_number,
+            is_final=is_final,
+            db=None
+        )
     
     return updated_count
 
@@ -243,10 +346,55 @@ def clear_participant_result_logic(
     game_participant.points = None
     game_participant.calculated_points = None
     
+    # Get tournament and round info for WebSocket
+    tournament = db.query(Tournament).filter(Tournament.id == game.tournament_id).first()
+    from models.tournament_round import TournamentRound
+    round_obj = db.query(TournamentRound).filter(TournamentRound.id == game.round_id).first()
+    round_number = round_obj.round_number if round_obj else 1
+    is_final = tournament.finals_started and tournament.regular_rounds and round_number > tournament.regular_rounds if tournament else False
+    
     # Recalculate participant's total score
     update_participant_total_score(db, participant_id)
     
     db.commit()
+    
+    # Send WebSocket notification: game_result_updated (with null positions)
+    from services.notification_service import notify_game_result_updated
+    send_websocket_notification_async(
+        notify_game_result_updated,
+        tournament_id=game.tournament_id,
+        game_id=game_id,
+        round_number=round_number,
+        is_final=is_final,
+        game_participant_id=game_participant.id,
+        participant_id=participant_id,
+        user_id=participant.user_id if participant else None,
+        battletag=participant_battletag,
+        positions=None,  # Cleared
+        calculated_points=None,
+        is_lobby_maker=game_participant.is_lobby_maker,
+        game_status=game.status.value if game.status else "active",
+        db=None
+    )
+    
+    # Get updated participant for position_updated notification
+    from models.tournament_participant import TournamentParticipant
+    updated_participant = db.query(TournamentParticipant).filter(
+        TournamentParticipant.id == participant_id
+    ).first()
+    
+    # Send WebSocket notification: position_updated
+    if updated_participant:
+        from services.notification_service import notify_position_updated
+        send_websocket_notification_async(
+            notify_position_updated,
+            tournament_id=game.tournament_id,
+            participant_id=participant_id,
+            user_id=updated_participant.user_id,
+            total_score=updated_participant.total_score or 0.0,
+            final_position=updated_participant.final_position,
+            db=None
+        )
     
     # Log the action (need user from context, will be passed from router)
     # This will be called from router with user context
@@ -318,15 +466,24 @@ def clear_participant_result_logic(
     participant_id: int,
     game: TournamentGame
 ):
-    # Check if tournament is finished (already checked in router, but good to keep in mind)
-    # We allow modifying completed games as long as the tournament/round isn't closed
-    
-    # If game was completed, we'll need to reopen it
+    """
+    Clear result for specific participant (used by DELETE /games/{game_id}/participant/{participant_id}/result).
+    Повинна поводитись так само, як і встановлення результату:
+    - оновлює результат в БД
+    - перераховує total_score
+    - шле WebSocket-події game_result_updated та position_updated.
+    """
+    from api.crud.participant_crud import get_participant
+    from sqlalchemy.orm import attributes
+    from models.tournament_round import TournamentRound
+    from models.tournament_participant import TournamentParticipant
+
+    # Якщо гра була завершена, відкриваємо її знову
     if game.status == GameStatus.COMPLETED:
         game.status = GameStatus.ACTIVE
         game.finished_at = None
     
-    # Find and clear participant result
+    # Знаходимо учасника гри
     game_participants = get_game_participants(db, game_id)
     game_participant = next(
         (gp for gp in game_participants if gp.participant_id == participant_id),
@@ -336,20 +493,70 @@ def clear_participant_result_logic(
     if not game_participant:
         raise HTTPException(status_code=404, detail="Participant not found in this game")
     
-    # Clear all result fields
+    # Очищаємо всі поля результату
     game_participant.points = None
     game_participant.positions = None
     game_participant.calculated_points = None
     
-    # Mark as modified
-    from sqlalchemy.orm import attributes
+    # Позначаємо змінені поля
     attributes.flag_modified(game_participant, "positions")
     attributes.flag_modified(game_participant, "calculated_points")
     
-    # Recalculate participant's total score
+    # Отримуємо турнір та раунд для WebSocket
+    tournament = db.query(Tournament).filter(Tournament.id == game.tournament_id).first()
+    round_obj = db.query(TournamentRound).filter(TournamentRound.id == game.round_id).first()
+    round_number = round_obj.round_number if round_obj else 1
+    is_final = (
+        tournament.finals_started
+        and tournament.regular_rounds
+        and round_number > tournament.regular_rounds
+        if tournament
+        else False
+    )
+    
+    # Перераховуємо total_score
     update_participant_total_score(db, participant_id)
     
     db.commit()
+
+    # Дані про учасника для WebSocket
+    participant = get_participant(db, participant_id)
+    participant_battletag = participant.user.battletag if participant and participant.user else "Unknown"
+    
+    # WebSocket: game_result_updated (position = null)
+    from services.notification_service import notify_game_result_updated, notify_position_updated
+    send_websocket_notification_async(
+        notify_game_result_updated,
+        tournament_id=game.tournament_id,
+        game_id=game_id,
+        round_number=round_number,
+        is_final=is_final,
+        game_participant_id=game_participant.id,
+        participant_id=participant_id,
+        user_id=participant.user_id if participant else None,
+        battletag=participant_battletag,
+        positions=None,
+        calculated_points=None,
+        is_lobby_maker=game_participant.is_lobby_maker,
+        game_status=game.status.value if game.status else "active",
+        db=None
+    )
+
+    # WebSocket: position_updated (оновлення total_score)
+    updated_participant = db.query(TournamentParticipant).filter(
+        TournamentParticipant.id == participant_id
+    ).first()
+
+    if updated_participant:
+        send_websocket_notification_async(
+            notify_position_updated,
+            tournament_id=game.tournament_id,
+            participant_id=participant_id,
+            user_id=updated_participant.user_id,
+            total_score=updated_participant.total_score or 0.0,
+            final_position=updated_participant.final_position,
+            db=None
+        )
 
 
 def submit_positions_batch_logic(
@@ -447,11 +654,88 @@ def submit_positions_batch_logic(
     
     db.commit()
     
-    # Update total scores for all updated participants
+    # Get tournament and round info for WebSocket
+    from models.tournament_round import TournamentRound
+    round_obj = db.query(TournamentRound).filter(TournamentRound.id == game.round_id).first()
+    round_number = round_obj.round_number if round_obj else 1
+    is_final = tournament.finals_started and tournament.regular_rounds and round_number > tournament.regular_rounds
+    
+    # Send WebSocket notifications for each updated participant
+    from services.notification_service import notify_game_result_updated, notify_position_updated, notify_game_completed
+    from models.tournament_participant import TournamentParticipant
+    from api.crud.participant_crud import get_participant
+    
     for update in updates:
         participant_id = update.get("participant_id")
-        if participant_id:
-            update_participant_total_score(db, participant_id)
+        positions = update.get("positions", update.get("position", []))
+        
+        if not participant_id or not positions:
+            continue
+        
+        # Find game participant
+        game_participants = get_game_participants(db, game_id)
+        game_participant = next(
+            (gp for gp in game_participants if gp.participant_id == participant_id), None
+        )
+        
+        if not game_participant:
+            continue
+        
+        # Get participant info
+        participant = get_participant(db, participant_id)
+        participant_battletag = participant.user.battletag if participant and participant.user else "Unknown"
+        
+        # Send game_result_updated
+        from services.notification_service import notify_game_result_updated
+        send_websocket_notification_async(
+            notify_game_result_updated,
+            tournament_id=tournament.id,
+            game_id=game_id,
+            round_number=round_number,
+            is_final=is_final,
+            game_participant_id=game_participant.id,
+            participant_id=participant_id,
+            user_id=participant.user_id if participant else None,
+            battletag=participant_battletag,
+            positions=sorted(positions),
+            calculated_points=game_participant.calculated_points,
+            is_lobby_maker=game_participant.is_lobby_maker,
+            game_status=game.status.value if game.status else "active",
+            db=None
+        )
+        
+        # Update total score
+        update_participant_total_score(db, participant_id)
+        
+        # Get updated participant for position_updated
+        updated_participant = db.query(TournamentParticipant).filter(
+            TournamentParticipant.id == participant_id
+        ).first()
+        
+        # Send position_updated
+        if updated_participant:
+            from services.notification_service import notify_position_updated
+            send_websocket_notification_async(
+                notify_position_updated,
+                tournament_id=tournament.id,
+                participant_id=participant_id,
+                user_id=updated_participant.user_id,
+                total_score=updated_participant.total_score or 0.0,
+                final_position=updated_participant.final_position,
+                db=None
+            )
+    
+    # Send game_completed if all positions set
+    if all_have_positions:
+        from services.notification_service import notify_game_completed
+        send_websocket_notification_async(
+            notify_game_completed,
+            tournament_id=tournament.id,
+            game_id=game_id,
+            round_number=round_number,
+            is_final=is_final,
+            db=None
+        )
             
     return updated_count, all_have_positions
 
@@ -624,8 +908,64 @@ def submit_participant_position_logic(
     description = f"changed results for player {participant_battletag} from {old_pos_str} to {new_pos_str}"
     log_game_action(db, game_id, user.id, "position_set", description)
     
+    # Get round info for WebSocket
+    from models.tournament_round import TournamentRound
+    round_obj = db.query(TournamentRound).filter(TournamentRound.id == game.round_id).first()
+    round_number = round_obj.round_number if round_obj else 1
+    is_final = tournament.finals_started and tournament.regular_rounds and round_number > tournament.regular_rounds
+    
+    # Send WebSocket notification: game_result_updated
+    from services.notification_service import notify_game_result_updated
+    send_websocket_notification_async(
+        notify_game_result_updated,
+        tournament_id=tournament.id,
+        game_id=game_id,
+        round_number=round_number,
+        is_final=is_final,
+        game_participant_id=game_participant.id,
+        participant_id=participant_id,
+        user_id=participant.user_id if participant else None,
+        battletag=participant_battletag,
+        positions=sorted(positions),
+        calculated_points=calculated_points,
+        is_lobby_maker=game_participant.is_lobby_maker,
+        game_status=game.status.value if game.status else "active",
+        db=None
+    )
+    
     # Now recalculate total score after commit
     update_participant_total_score(db, participant_id)
+    
+    # Get updated participant for position_updated notification
+    from models.tournament_participant import TournamentParticipant
+    updated_participant = db.query(TournamentParticipant).filter(
+        TournamentParticipant.id == participant_id
+    ).first()
+    
+    # Send WebSocket notification: position_updated
+    if updated_participant:
+        from services.notification_service import notify_position_updated
+        send_websocket_notification_async(
+            notify_position_updated,
+            tournament_id=tournament.id,
+            participant_id=participant_id,
+            user_id=updated_participant.user_id,
+            total_score=updated_participant.total_score or 0.0,
+            final_position=updated_participant.final_position,
+            db=None
+        )
+    
+    # Send WebSocket notification: game_completed (if all positions set)
+    if all_have_positions:
+        from services.notification_service import notify_game_completed
+        send_websocket_notification_async(
+            notify_game_completed,
+            tournament_id=tournament.id,
+            game_id=game_id,
+            round_number=round_number,
+            is_final=is_final,
+            db=None
+        )
     
     return sorted(positions), calculated_points, all_have_positions
 
@@ -692,6 +1032,27 @@ def assign_lobby_maker_logic(
         description = f"assigned lobby maker {new_lobby_maker_battletag}"
     log_game_action(db, game_id, user.id, "lobby_maker_assigned", description)
     
+    # Get round number for WebSocket notification
+    from models.tournament_round import TournamentRound
+    round_obj = db.query(TournamentRound).filter(TournamentRound.id == game.round_id).first()
+    round_number = round_obj.round_number if round_obj else 1
+    
+    # Get game_participant_id for WebSocket notification
+    game_participant_id = target_gp.id
+    
+    # Send WebSocket notification
+    from services.notification_service import notify_lobby_maker_assigned
+    send_websocket_notification_async(
+        notify_lobby_maker_assigned,
+        tournament_id=tournament.id,
+        game_id=game_id,
+        round_number=round_number,
+        lobby_maker_id=participant.user_id,
+        lobby_maker_participant_id=game_participant_id,
+        lobby_maker_battletag=new_lobby_maker_battletag,
+        db=None
+    )
+    
     return {
         "game_id": game_id,
         "lobby_maker_id": participant.user_id,
@@ -750,6 +1111,21 @@ def remove_lobby_maker_logic(
     if old_lobby_maker_battletag:
         description = f"removed lobby maker {old_lobby_maker_battletag}"
         log_game_action(db, game_id, user.id, "lobby_maker_removed", description)
+    
+    # Get round number for WebSocket notification
+    from models.tournament_round import TournamentRound
+    round_obj = db.query(TournamentRound).filter(TournamentRound.id == game.round_id).first()
+    round_number = round_obj.round_number if round_obj else 1
+    
+    # Send WebSocket notification
+    from services.notification_service import notify_lobby_maker_removed
+    send_websocket_notification_async(
+        notify_lobby_maker_removed,
+        tournament_id=tournament.id,
+        game_id=game_id,
+        round_number=round_number,
+        db=None
+    )
     
     return {"message": "Lobby Maker removed successfully"}
 

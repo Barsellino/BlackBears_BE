@@ -594,11 +594,18 @@ async def create_next_round_endpoint(
             f"created {round_name}"
         )
         
-        # Send WebSocket notification
-        from services.notification_service import notify_round_started
-        import asyncio
+        # Send WebSocket notification (with force_reload)
+        from services.notification_service import notify_next_round_created
+        from services.games_service import send_websocket_notification_async
         final_round_number = next_round.round_number - tournament.regular_rounds if is_final else None
-        asyncio.create_task(notify_round_started(tournament_id, next_round.round_number, is_final, final_round_number))
+        send_websocket_notification_async(
+            notify_next_round_created,
+            tournament_id=tournament_id,
+            round_number=next_round.round_number,
+            is_final=is_final,
+            final_round_number=final_round_number,
+            db=None
+        )
         
         return {
             "message": "Next round created successfully",
@@ -737,10 +744,27 @@ async def start_finals_endpoint(
         f"started finals with {len(top_participants)} participants"
     )
     
-    # Send WebSocket notification
+    # Send WebSocket notification (with force_reload)
+    from services.notification_service import notify_next_round_created
+    from services.games_service import send_websocket_notification_async
+    send_websocket_notification_async(
+        notify_next_round_created,
+        tournament_id=tournament_id,
+        round_number=first_final_round_number,
+        is_final=True,
+        final_round_number=1,  # First final round
+        db=None
+    )
+    
+    # Also send finals_started notification to finalists only
     from services.notification_service import notify_finals_started
-    import asyncio
-    asyncio.create_task(notify_finals_started(tournament_id, first_final_round_number, len(top_participants)))
+    send_websocket_notification_async(
+        notify_finals_started,
+        tournament_id=tournament_id,
+        current_round=first_final_round_number,
+        finalists_count=len(top_participants),
+        db=None
+    )
     
     return {
         "message": "Finals started",
@@ -774,10 +798,14 @@ async def finish_tournament_endpoint(
             f"finished tournament {tournament.name}"
         )
         
-        # Send WebSocket notification
+        # Send WebSocket notification (with force_reload)
         from services.notification_service import notify_tournament_finished
-        import asyncio
-        asyncio.create_task(notify_tournament_finished(tournament_id))
+        from services.games_service import send_websocket_notification_async
+        send_websocket_notification_async(
+            notify_tournament_finished,
+            tournament_id=tournament_id,
+            db=None
+        )
         
         return {
             "message": "Tournament finished successfully",
@@ -1026,4 +1054,56 @@ async def get_round_games(
             "final_round_number": final_round_number
         },
         "games": sorted_games
+    }
+
+
+@router.post("/{tournament_id}/test-next-round-notification")
+async def test_next_round_notification(
+    tournament_id: int,
+    round_number: int = Query(3, description="Round number to test"),
+    is_final: bool = Query(False, description="Is final round"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Тестовий ендпоінт для перевірки next_round_created повідомлення.
+    Відправляє тестове WebSocket повідомлення без створення раунду.
+    """
+    # Перевірка, чи турнір існує
+    tournament = validate_tournament_exists(db, tournament_id)
+    
+    # Перевірка, чи користувач є учасником або адміном
+    from models.tournament_participant import TournamentParticipant
+    participant = db.query(TournamentParticipant).filter(
+        TournamentParticipant.tournament_id == tournament_id,
+        TournamentParticipant.user_id == current_user.id
+    ).first()
+    
+    if not participant and current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be a tournament participant or admin to test notifications"
+        )
+    
+    # Відправка тестового повідомлення
+    from services.notification_service import notify_next_round_created
+    from services.games_service import send_websocket_notification_async
+    
+    final_round_number = round_number - tournament.regular_rounds if is_final and tournament.regular_rounds else None
+    
+    send_websocket_notification_async(
+        notify_next_round_created,
+        tournament_id=tournament_id,
+        round_number=round_number,
+        is_final=is_final,
+        final_round_number=final_round_number,
+        db=db
+    )
+    
+    return {
+        "message": "Test notification sent",
+        "tournament_id": tournament_id,
+        "round_number": round_number,
+        "is_final": is_final,
+        "force_reload": True
     }

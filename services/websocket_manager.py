@@ -50,15 +50,21 @@ class TournamentWebSocketManager:
     async def send_to_user(self, user_id: int, message: dict):
         """Відправити повідомлення конкретному користувачу"""
         if user_id not in self.user_connections:
+            logger.debug(f"[WS] User {user_id} not connected, skipping message type: {message.get('type')}")
             return
         
         disconnected = []
+        sent_count = 0
         for ws in list(self.user_connections[user_id]):
             try:
                 await ws.send_json(message)
+                sent_count += 1
             except Exception as e:
-                logger.warning(f"Failed to send message to user {user_id}: {e}")
+                logger.warning(f"[WS] Failed to send message to user {user_id}: {e}")
                 disconnected.append(ws)
+        
+        if sent_count > 0:
+            logger.debug(f"[WS] Sent message type {message.get('type')} to user {user_id} ({sent_count} connection(s))")
         
         # Очищаємо мертві підключення
         for ws in disconnected:
@@ -85,7 +91,34 @@ class TournamentWebSocketManager:
         ).all()
         
         user_ids = [p.user_id for p in participants]
+        logger.info(f"[WS] Broadcasting to tournament {tournament_id}: {len(user_ids)} participants, message type: {message.get('type')}")
+        
+        if not user_ids:
+            logger.warning(f"[WS] No participants found for tournament {tournament_id}")
+        
         await self.broadcast_to_users(user_ids, message)
+        
+        # Перевірка, скільки користувачів підключені
+        connected_count = sum(1 for uid in user_ids if uid in self.user_connections)
+        logger.info(f"[WS] Sent to {connected_count}/{len(user_ids)} connected participants for tournament {tournament_id}")
+    
+    async def broadcast_to_all(self, message: dict):
+        """
+        Відправити повідомлення всім підключеним користувачам (незалежно від участі в турнірі).
+        Використовується для оновлень результатів гри, щоб всі могли бачити зміни.
+        """
+        disconnected = []
+        for user_id, websockets in list(self.user_connections.items()):
+            for ws in list(websockets):
+                try:
+                    await ws.send_json(message)
+                except Exception as e:
+                    logger.warning(f"Failed to send message to user {user_id}: {e}")
+                    disconnected.append(ws)
+        
+        # Очищаємо мертві підключення
+        for ws in disconnected:
+            await self.disconnect(ws)
     
     def get_connected_users(self) -> Set[int]:
         """Отримати список всіх підключених користувачів"""
