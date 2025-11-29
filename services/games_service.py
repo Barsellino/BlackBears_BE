@@ -353,10 +353,11 @@ def clear_participant_result_logic(
     round_number = round_obj.round_number if round_obj else 1
     is_final = tournament.finals_started and tournament.regular_rounds and round_number > tournament.regular_rounds if tournament else False
     
-    # Recalculate participant's total score
-    update_participant_total_score(db, participant_id)
-    
+    # Спочатку закомітимо очищення, щоб update_participant_total_score бачив очищені значення
     db.commit()
+    
+    # Recalculate participant's total score (тепер він побачить очищені calculated_points)
+    update_participant_total_score(db, participant_id)
     
     # Send WebSocket notification: game_result_updated (with null positions)
     from services.notification_service import notify_game_result_updated
@@ -383,9 +384,15 @@ def clear_participant_result_logic(
         TournamentParticipant.id == participant_id
     ).first()
     
+    # Оновлюємо об'єкт з БД, щоб отримати актуальні значення
+    if updated_participant:
+        db.refresh(updated_participant)
+    
     # Send WebSocket notification: position_updated
     if updated_participant:
         from services.notification_service import notify_position_updated
+        # Для фінальних ігор передаємо також finals_score
+        finals_score = updated_participant.finals_score if is_final else None
         send_websocket_notification_async(
             notify_position_updated,
             tournament_id=game.tournament_id,
@@ -393,6 +400,7 @@ def clear_participant_result_logic(
             user_id=updated_participant.user_id,
             total_score=updated_participant.total_score or 0.0,
             final_position=updated_participant.final_position,
+            finals_score=finals_score,
             db=None
         )
     
@@ -514,10 +522,11 @@ def clear_participant_result_logic(
         else False
     )
     
-    # Перераховуємо total_score
-    update_participant_total_score(db, participant_id)
-    
+    # Спочатку закомітимо очищення, щоб update_participant_total_score бачив очищені значення
     db.commit()
+    
+    # Перераховуємо total_score та finals_score (тепер він побачить очищені calculated_points)
+    update_participant_total_score(db, participant_id)
 
     # Дані про учасника для WebSocket
     participant = get_participant(db, participant_id)
@@ -542,12 +551,19 @@ def clear_participant_result_logic(
         db=None
     )
 
-    # WebSocket: position_updated (оновлення total_score)
+    # WebSocket: position_updated (оновлення total_score та finals_score)
+    # Отримуємо оновлені дані з БД після перерахунку
     updated_participant = db.query(TournamentParticipant).filter(
         TournamentParticipant.id == participant_id
     ).first()
+    
+    # Оновлюємо об'єкт з БД, щоб отримати актуальні значення
+    if updated_participant:
+        db.refresh(updated_participant)
 
     if updated_participant:
+        # Для фінальних ігор передаємо також finals_score
+        finals_score = updated_participant.finals_score if is_final else None
         send_websocket_notification_async(
             notify_position_updated,
             tournament_id=game.tournament_id,
@@ -555,6 +571,7 @@ def clear_participant_result_logic(
             user_id=updated_participant.user_id,
             total_score=updated_participant.total_score or 0.0,
             final_position=updated_participant.final_position,
+            finals_score=finals_score,
             db=None
         )
 

@@ -331,6 +331,7 @@ async def notify_position_updated(
     user_id: int,
     total_score: float,
     final_position: int = None,
+    finals_score: float = None,
     db=None
 ):
     """Відправити сповіщення про оновлення загальних очок учасника"""
@@ -352,9 +353,13 @@ async def notify_position_updated(
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
         
+        # Додаємо finals_score, якщо передано (для фінальних ігор)
+        if finals_score is not None:
+            message["finals_score"] = finals_score
+        
         # Відправляємо всім підключеним (не тільки учасникам турніру)
         await websocket_manager.broadcast_to_all(message)
-        logger.info(f"Sent position_updated notification for participant {participant_id}, total_score: {total_score}")
+        logger.info(f"Sent position_updated notification for participant {participant_id}, total_score: {total_score}, finals_score: {finals_score}")
     finally:
         if should_close:
             db.close()

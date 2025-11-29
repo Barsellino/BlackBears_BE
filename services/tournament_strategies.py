@@ -137,14 +137,49 @@ class SwissStrategy(TournamentStrategy):
         is_finals_round = tournament.finals_started and tournament.regular_rounds and next_round_number > tournament.regular_rounds
         
         if is_finals_round:
-            # FINALS LOGIC: Only top participants
+            # FINALS LOGIC: Only actual finalists from previous final rounds (with swaps taken into account)
             participants_count = tournament.finals_participants_count or 8
             next_round = create_round_with_games(db, tournament.id, next_round_number, participants_count)
             
-            # Get top participants (same as in start-finals)
-            participants = db.query(TournamentParticipant).filter(
-                TournamentParticipant.tournament_id == tournament.id
-            ).order_by(TournamentParticipant.total_score.desc()).limit(participants_count).all()
+            # Get actual finalists from previous final rounds (not top-N by total_score)
+            # This ensures that swapped finalists are included in subsequent final rounds
+            regular_rounds = tournament.regular_rounds or tournament.total_rounds
+            previous_final_rounds = db.query(TournamentRound).filter(
+                TournamentRound.tournament_id == tournament.id,
+                TournamentRound.round_number > regular_rounds,
+                TournamentRound.round_number < next_round_number  # Only previous final rounds
+            ).all()
+            
+            if previous_final_rounds:
+                # Get actual finalists from previous final rounds
+                previous_final_round_ids = [r.id for r in previous_final_rounds]
+                previous_final_games = db.query(TournamentGame).filter(
+                    TournamentGame.tournament_id == tournament.id,
+                    TournamentGame.round_id.in_(previous_final_round_ids)
+                ).all()
+                
+                if previous_final_games:
+                    previous_final_game_ids = [g.id for g in previous_final_games]
+                    finalist_rows = db.query(GameParticipant.participant_id).filter(
+                        GameParticipant.game_id.in_(previous_final_game_ids)
+                    ).distinct().all()
+                    finalist_ids = [row[0] for row in finalist_rows]
+                    
+                    # Get TournamentParticipant objects for actual finalists
+                    participants = db.query(TournamentParticipant).filter(
+                        TournamentParticipant.tournament_id == tournament.id,
+                        TournamentParticipant.id.in_(finalist_ids)
+                    ).all()
+                else:
+                    # Fallback: if no previous final games, use top-N by total_score
+                    participants = db.query(TournamentParticipant).filter(
+                        TournamentParticipant.tournament_id == tournament.id
+                    ).order_by(TournamentParticipant.total_score.desc()).limit(participants_count).all()
+            else:
+                # First final round: use top-N by total_score (as in start-finals)
+                participants = db.query(TournamentParticipant).filter(
+                    TournamentParticipant.tournament_id == tournament.id
+                ).order_by(TournamentParticipant.total_score.desc()).limit(participants_count).all()
             
             # Assign participants randomly for finals
             self._assign_participants_randomly(db, next_round, participants, tournament)

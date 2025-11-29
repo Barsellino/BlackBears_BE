@@ -212,6 +212,11 @@ class TournamentParticipant(TournamentParticipantBase):
     phone: Optional[str] = None
     telegram: Optional[str] = None
     battlegrounds_rating: Optional[int] = None
+    
+    # Finalist status (only for tournaments with finals)
+    was_original_finalist: bool = False  # Was in top-N by total_score (before swaps)
+    is_swapped_finalist: bool = False    # Was added via swap (not in original top-N, but plays in finals)
+    plays_in_finals: bool = False        # Currently plays in final games (after swaps)
 
     class Config:
         from_attributes = True

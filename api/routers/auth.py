@@ -111,7 +111,16 @@ async def auth_callback(code: str, state: str = None, db: Session = Depends(get_
 
 @router.get("/me", response_model=UserSchema)
 async def get_current_user_info(current_user = Depends(get_current_active_user)):
-    """Get current authenticated user info"""
+    """
+    Get current authenticated user info.
+    Додано просте логування для діагностики можливих проблем з токенами.
+    """
+    from core.logging import logger
+    try:
+        logger.info(f"/auth/me -> user_id={current_user.id}, battletag={current_user.battletag}, role={current_user.role}")
+    except Exception:
+        # Не ламаємо відповідь, якщо з логером щось піде не так
+        pass
     return current_user
 
 

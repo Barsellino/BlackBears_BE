@@ -27,8 +27,11 @@ class Settings:
         self.battlenet_user_info_url: str = "https://oauth.battle.net/userinfo"
         
         # JWT
+        # ВАЖЛИВО: на проді обов'язково задати JWT_SECRET_KEY через змінні оточення.
+        # "fallback-secret" використовується лише для локальної розробки.
         self.jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "fallback-secret")
         self.jwt_algorithm: str = "HS256"
-        self.jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
+        # Скорочуємо час життя токена до 3 днів для кращої безпеки
+        self.jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", 60 * 24 * 3))  # 3 days by default
 
 settings = Settings()

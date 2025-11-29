@@ -1,8 +1,54 @@
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from models.tournament import Tournament, TournamentStatus
 from models.tournament_participant import TournamentParticipant
 from schemas.tournament import TournamentCreate, TournamentUpdate
+
+
+def _calculate_finalist_status(db: Session, tournament: Tournament) -> Tuple[set, set]:
+    """
+    Calculate original finalist IDs and actual finalist IDs for a tournament.
+    Returns: (original_finalist_ids, actual_finalist_ids)
+    """
+    original_finalist_ids = set()
+    actual_finalist_ids = set()
+    
+    if tournament.with_finals and tournament.finals_started:
+        # Original finalists = top-N by total_score (before any swaps)
+        finals_count = tournament.finals_participants_count or 8
+        all_participants_sorted = sorted(
+            tournament.participants,
+            key=lambda p: p.total_score or 0,
+            reverse=True
+        )
+        original_finalist_ids = {p.id for p in all_participants_sorted[:finals_count]}
+        
+        # Actual finalists = those who actually play in final games (after swaps)
+        from models.tournament_round import TournamentRound
+        from models.tournament_game import TournamentGame
+        from models.game_participant import GameParticipant
+        
+        regular_rounds = tournament.regular_rounds or tournament.total_rounds
+        final_rounds = db.query(TournamentRound).filter(
+            TournamentRound.tournament_id == tournament.id,
+            TournamentRound.round_number > regular_rounds
+        ).all()
+        
+        if final_rounds:
+            final_round_ids = [r.id for r in final_rounds]
+            final_games = db.query(TournamentGame).filter(
+                TournamentGame.tournament_id == tournament.id,
+                TournamentGame.round_id.in_(final_round_ids)
+            ).all()
+            
+            if final_games:
+                final_game_ids = [g.id for g in final_games]
+                finalist_rows = db.query(GameParticipant.participant_id).filter(
+                    GameParticipant.game_id.in_(final_game_ids)
+                ).distinct().all()
+                actual_finalist_ids = {row[0] for row in finalist_rows}
+    
+    return original_finalist_ids, actual_finalist_ids
 
 
 def create_tournament(db: Session, tournament: TournamentCreate, creator_id: int):
@@ -78,10 +124,26 @@ def get_tournament(db: Session, tournament_id: int):
         else:
             tournament.winners = []
 
-        # Add user info to participants
+        # Calculate finalist status
+        original_finalist_ids, actual_finalist_ids = _calculate_finalist_status(db, tournament)
+        
+        # Add user info to participants and mark finalist status
         for participant in tournament.participants:
             participant.battletag = participant.user.battletag
             participant.name = participant.user.name
+            
+            # Mark finalist status (only for tournaments with finals)
+            if tournament.with_finals and tournament.finals_started:
+                participant.was_original_finalist = participant.id in original_finalist_ids
+                participant.is_swapped_finalist = (
+                    participant.id in actual_finalist_ids and
+                    participant.id not in original_finalist_ids
+                )
+                participant.plays_in_finals = participant.id in actual_finalist_ids
+            else:
+                participant.was_original_finalist = False
+                participant.is_swapped_finalist = False
+                participant.plays_in_finals = False
         
         # Sort participants based on tournament status
         if tournament.status == TournamentStatus.FINISHED:

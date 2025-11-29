@@ -133,11 +133,28 @@ async def get_tournament_details(
         is_creator = tournament.creator_id == current_user.id
         has_access = is_admin or is_creator
         
+    # Calculate finalist status (already done in get_tournament, but ensure it's set)
+    from api.crud.tournament_crud import _calculate_finalist_status
+    original_finalist_ids, actual_finalist_ids = _calculate_finalist_status(db, tournament)
+    
     # Populate participant details
     for participant in tournament.participants:
         # Always set public info
         participant.battletag = participant.user.battletag
         participant.name = participant.user.name
+        
+        # Mark finalist status (only for tournaments with finals)
+        if tournament.with_finals and tournament.finals_started:
+            participant.was_original_finalist = participant.id in original_finalist_ids
+            participant.is_swapped_finalist = (
+                participant.id in actual_finalist_ids and
+                participant.id not in original_finalist_ids
+            )
+            participant.plays_in_finals = participant.id in actual_finalist_ids
+        else:
+            participant.was_original_finalist = False
+            participant.is_swapped_finalist = False
+            participant.plays_in_finals = False
         
         if has_access:
             participant.phone = participant.user.phone
@@ -412,6 +429,425 @@ async def get_finals_leaderboard_endpoint(
         raise HTTPException(status_code=400, detail="Finals haven't started yet")
     
     return get_finals_leaderboard(db, tournament_id)
+
+
+@router.get("/{tournament_id}/finals/candidates", response_model=List[TournamentParticipant])
+async def get_finals_candidates_endpoint(
+    tournament_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Отримати список учасників турніру, які не потрапили у фінали (кандидати для заміни).
+    
+    Доступ:
+    - створювач турніру
+    - SUPER_ADMIN
+    """
+    from api.crud.participant_crud import get_finals_candidates
+
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+
+    if not tournament.with_finals:
+        raise HTTPException(status_code=400, detail="Tournament doesn't have finals")
+
+    # Якщо фінали ще не згенеровані/не стартували — теж помилка
+    if not tournament.finals_started:
+        raise HTTPException(status_code=400, detail="Finals haven't been generated yet")
+
+    # Доступ тільки для creator або SUPER_ADMIN (як для майбутнього свапу)
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN
+    is_creator = tournament.creator_id == current_user.id
+    if not (is_creator or is_super_admin):
+        raise HTTPException(
+            status_code=403,
+            detail="Only tournament creator or super admin can view finals candidates"
+        )
+
+    return get_finals_candidates(db, tournament_id)
+
+
+class FinalsSwapRequest(BaseModel):
+    """Запит на заміну фіналіста іншим гравцем."""
+    from_participant_id: int  # поточний фіналіст, якого прибираємо
+    to_participant_id: int    # кандидат з тих, хто не в фіналі
+
+
+class ParticipantSwapRequest(BaseModel):
+    """Запит на заміну учасника турніру іншим користувачем (до кінця першого раунду)."""
+    from_user_id: int  # користувач, якого замінюємо
+    to_user_id: int    # користувач, на якого замінюємо
+
+
+@router.post("/{tournament_id}/finals/swap", response_model=TournamentParticipant)
+async def swap_finalist_endpoint(
+    tournament_id: int,
+    swap_data: FinalsSwapRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Свапнути фіналіста на іншого гравця.
+    
+    Умови:
+    - турнір має фінали (`with_finals == True`)
+    - фінали вже згенеровані (`finals_started == True`)
+    - жодна фінальна гра ще не має результатів (усі final GameParticipant.positions/points == null)
+    - доступ мають тільки creator турніру або SUPER_ADMIN
+    """
+    from api.crud.participant_crud import get_finals_candidates
+    from models.tournament_round import TournamentRound
+    from models.tournament_game import TournamentGame, GameStatus
+    from models.game_participant import GameParticipant
+    from models.tournament_participant import TournamentParticipant as TPModel
+
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+
+    if not tournament.with_finals:
+        raise HTTPException(status_code=400, detail="Tournament doesn't have finals")
+
+    if not tournament.finals_started:
+        raise HTTPException(status_code=400, detail="Finals haven't been generated yet")
+
+    # Перевірка прав доступу
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN
+    is_creator = tournament.creator_id == current_user.id
+    if not (is_creator or is_super_admin):
+        raise HTTPException(
+            status_code=403,
+            detail="Only tournament creator or super admin can swap finalists"
+        )
+
+    # Знайти всі фінальні раунди (round_number > regular_rounds)
+    regular_rounds = tournament.regular_rounds or tournament.total_rounds
+    final_rounds = db.query(TournamentRound).filter(
+        TournamentRound.tournament_id == tournament_id,
+        TournamentRound.round_number > regular_rounds
+    ).all()
+
+    if not final_rounds:
+        raise HTTPException(status_code=400, detail="Final rounds not found")
+
+    final_round_ids = [r.id for r in final_rounds]
+
+    # Отримати всі фінальні ігри
+    final_games = db.query(TournamentGame).filter(
+        TournamentGame.tournament_id == tournament_id,
+        TournamentGame.round_id.in_(final_round_ids)
+    ).all()
+
+    if not final_games:
+        raise HTTPException(status_code=400, detail="Final games not found")
+
+    # Перевірити, що в жодній фінальній грі ще немає результатів
+    any_results = db.query(GameParticipant).join(TournamentGame).filter(
+        TournamentGame.id.in_([g.id for g in final_games]),
+        (GameParticipant.positions.isnot(None)) | (GameParticipant.points.isnot(None))
+    ).first()
+
+    if any_results:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot swap finalists: some final games already have results"
+        )
+
+    from_id = swap_data.from_participant_id
+    to_id = swap_data.to_participant_id
+
+    if from_id == to_id:
+        raise HTTPException(status_code=400, detail="Cannot swap the same participant")
+
+    # Перевірка, що обидва учасники належать цьому турніру
+    from_participant = db.query(TPModel).filter(
+        TPModel.id == from_id,
+        TPModel.tournament_id == tournament_id
+    ).first()
+
+    to_participant = db.query(TPModel).filter(
+        TPModel.id == to_id,
+        TPModel.tournament_id == tournament_id
+    ).first()
+
+    if not from_participant or not to_participant:
+        raise HTTPException(status_code=404, detail="Participants must belong to this tournament")
+
+    # Перевірка, що from_participant зараз у фіналі (фактично грає у фінальних іграх)
+    final_game_ids = [g.id for g in final_games]
+    actual_finalist_rows = db.query(GameParticipant.participant_id).filter(
+        GameParticipant.game_id.in_(final_game_ids)
+    ).distinct().all()
+    actual_finalist_ids = {row[0] for row in actual_finalist_rows}
+
+    if from_id not in actual_finalist_ids:
+        raise HTTPException(status_code=400, detail="from_participant is not in finals")
+
+    # Перевірка, що to_participant НЕ в фіналі
+    if to_id in actual_finalist_ids:
+        raise HTTPException(status_code=400, detail="to_participant is already in finals")
+
+    # Замінити from_participant на to_participant у всіх фінальних іграх
+    for game in final_games:
+        gp = db.query(GameParticipant).filter(
+            GameParticipant.game_id == game.id,
+            GameParticipant.participant_id == from_id
+        ).first()
+
+        if gp:
+            gp.participant_id = to_id
+            # is_lobby_maker залишаємо як є (якщо цей слот був лоббі мейкером)
+
+    db.commit()
+
+    # Логування дії
+    from services.tournament_manager import log_tournament_action
+    from_btag = from_participant.user.battletag if from_participant.user else "Unknown"
+    to_btag = to_participant.user.battletag if to_participant.user else "Unknown"
+
+    log_tournament_action(
+        db,
+        tournament_id,
+        current_user.id,
+        "finals_swap",
+        f"swapped finalist {from_btag} (id={from_id}) with {to_btag} (id={to_id})"
+    )
+
+    # Повертаємо того, хто тепер став фіналістом (to_participant)
+    return to_participant
+
+
+@router.post("/{tournament_id}/swap-participant", response_model=TournamentParticipant)
+async def swap_participant_endpoint(
+    tournament_id: int,
+    swap_data: ParticipantSwapRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Замінити учасника турніру іншим користувачем.
+    
+    Умови:
+    - турнір має статус REGISTRATION або ACTIVE
+    - якщо ACTIVE, то current_round == 1 і перший раунд ще не завершений
+    - from_user_id має бути учасником турніру
+    - to_user_id не має бути учасником турніру
+    - доступ мають тільки creator турніру або SUPER_ADMIN
+    """
+    from models.tournament_round import TournamentRound, RoundStatus
+    from models.tournament_game import TournamentGame, GameStatus
+    from models.game_participant import GameParticipant
+    from models.tournament_participant import TournamentParticipant as TPModel
+    from models.user import User as UserModel
+    from models.tournament import TournamentStatus as ModelTournamentStatus
+
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+
+    # Перевірка прав доступу
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN
+    is_creator = tournament.creator_id == current_user.id
+    if not (is_creator or is_super_admin):
+        raise HTTPException(
+            status_code=403,
+            detail="Only tournament creator or super admin can swap participants"
+        )
+
+    # Перевірка статусу турніру
+    if tournament.status not in [ModelTournamentStatus.REGISTRATION, ModelTournamentStatus.ACTIVE]:
+        raise HTTPException(
+            status_code=400,
+            detail="Can only swap participants in registration or active tournaments"
+        )
+
+    # Якщо турнір активний, перевіряємо, що це перший раунд і він ще не завершений
+    first_round = None
+    if tournament.status == ModelTournamentStatus.ACTIVE:
+        if tournament.current_round != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Can only swap participants before the end of the first round"
+            )
+
+        # Перевіряємо, що перший раунд існує і не завершений
+        first_round = db.query(TournamentRound).filter(
+            TournamentRound.tournament_id == tournament_id,
+            TournamentRound.round_number == 1
+        ).first()
+
+        if not first_round:
+            raise HTTPException(status_code=400, detail="First round not found")
+
+        if first_round.status == RoundStatus.COMPLETED:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot swap participants: first round is already completed"
+            )
+
+    from_user_id = swap_data.from_user_id
+    to_user_id = swap_data.to_user_id
+
+    if from_user_id == to_user_id:
+        raise HTTPException(status_code=400, detail="Cannot swap the same user")
+
+    # Перевірка, що from_user_id є учасником турніру
+    from_participant = db.query(TPModel).filter(
+        TPModel.tournament_id == tournament_id,
+        TPModel.user_id == from_user_id
+    ).first()
+
+    if not from_participant:
+        raise HTTPException(
+            status_code=404,
+            detail="from_user_id is not a participant in this tournament"
+        )
+
+    # Якщо турнір активний, перевіряємо, що в іграх цього конкретного учасника немає результатів
+    if tournament.status == ModelTournamentStatus.ACTIVE and first_round:
+        # Перевіряємо тільки GameParticipant для цього конкретного учасника в першому раунді
+        import json
+        participant_game_results = db.query(GameParticipant).join(TournamentGame).filter(
+            GameParticipant.participant_id == from_participant.id,
+            TournamentGame.tournament_id == tournament_id,
+            TournamentGame.round_id == first_round.id
+        ).all()
+        
+        for gp in participant_game_results:
+            # Перевіряємо points (має бути None)
+            if gp.points is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot swap participant: this participant already has results in the first round"
+                )
+            
+            # Перевіряємо calculated_points (має бути None)
+            if gp.calculated_points is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot swap participant: this participant already has results in the first round"
+                )
+            
+            # Перевіряємо positions (має бути None або порожній JSON масив "[]")
+            if gp.positions is not None and gp.positions.strip():
+                try:
+                    positions = json.loads(gp.positions)
+                    # Якщо positions - це не порожній список, значить є результати
+                    if isinstance(positions, list) and len(positions) > 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Cannot swap participant: this participant already has results in the first round"
+                        )
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    # Якщо не вдалося розпарсити як JSON, але positions не порожній - вважаємо, що є результати
+                    if gp.positions.strip() not in ['[]', 'null', '']:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Cannot swap participant: this participant already has results in the first round"
+                        )
+
+    # Перевірка, що to_user_id не є учасником турніру
+    to_participant_existing = db.query(TPModel).filter(
+        TPModel.tournament_id == tournament_id,
+        TPModel.user_id == to_user_id
+    ).first()
+
+    if to_participant_existing:
+        raise HTTPException(
+            status_code=400,
+            detail="to_user_id is already a participant in this tournament"
+        )
+
+    # Перевірка, що to_user_id існує
+    to_user = db.query(UserModel).filter(UserModel.id == to_user_id).first()
+    if not to_user:
+        raise HTTPException(status_code=404, detail="to_user_id not found")
+
+    # Зберігаємо старого користувача для логування
+    from_user = from_participant.user
+    from_btag = from_user.battletag if from_user else "Unknown"
+
+    # Замінюємо user_id у TournamentParticipant
+    from_participant.user_id = to_user_id
+    db.commit()
+
+    # Якщо турнір активний (перший раунд вже створений), participant_id залишається той самий
+    # бо ми змінили user_id у TournamentParticipant, тому GameParticipant автоматично
+    # буде посилатися на нового користувача через зв'язок participant -> user
+
+    # Логування дії
+    from services.tournament_manager import log_tournament_action
+    to_btag = to_user.battletag if to_user else "Unknown"
+
+    # Оновлюємо зв'язок, щоб отримати новий user
+    db.refresh(from_participant)
+
+    log_tournament_action(
+        db,
+        tournament_id,
+        current_user.id,
+        "participant_swapped",
+        f"swapped participant {from_btag} (user_id={from_user_id}) with {to_btag} (user_id={to_user_id})"
+    )
+
+    # Повертаємо оновлений participant
+    return from_participant
+
+
+@router.get("/{tournament_id}/swap-participant/candidates")
+async def get_swap_participant_candidates(
+    tournament_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Отримати список користувачів, яких можна використати для заміни учасника турніру.
+    Повертає всіх користувачів, які НЕ є учасниками цього турніру.
+    
+    Доступ: тільки creator турніру або SUPER_ADMIN
+    """
+    from models.user import User as UserModel
+    from models.tournament_participant import TournamentParticipant
+    
+    tournament = get_tournament(db, tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+
+    # Перевірка прав доступу
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN
+    is_creator = tournament.creator_id == current_user.id
+    if not (is_creator or is_super_admin):
+        raise HTTPException(
+            status_code=403,
+            detail="Only tournament creator or super admin can view swap candidates"
+        )
+
+    # Отримуємо ID всіх учасників турніру
+    participant_user_ids = db.query(TournamentParticipant.user_id).filter(
+        TournamentParticipant.tournament_id == tournament_id
+    ).all()
+    participant_user_ids = {row[0] for row in participant_user_ids}
+
+    # Отримуємо всіх користувачів, які НЕ є учасниками турніру
+    candidates = db.query(UserModel).filter(
+        UserModel.is_active == True,
+        ~UserModel.id.in_(participant_user_ids) if participant_user_ids else True
+    ).order_by(UserModel.battletag).all()
+
+    # Формуємо відповідь
+    result = [
+        {
+            "id": user.id,
+            "battletag": user.battletag,
+            "name": user.name,
+            "battlegrounds_rating": user.battlegrounds_rating
+        }
+        for user in candidates
+    ]
+
+    return result
 
 
 @router.post("/{tournament_id}/add-participant/{user_id}", response_model=TournamentParticipant)

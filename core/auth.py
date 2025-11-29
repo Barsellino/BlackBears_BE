@@ -15,23 +15,62 @@ security = HTTPBearer()
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    """
+    Створення JWT токена.
+    Додаємо:
+    - exp  (час життя)
+    - iss  (issuer)   -> 'blackbears-backend'
+    - aud  (audience) -> 'blackbears-frontend'
+    """
     to_encode = data.copy()
+
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
-    
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+    to_encode.update(
+        {
+            "exp": expire,
+            "iss": "blackbears-backend",
+            "aud": "blackbears-frontend",
+        }
+    )
+
+    encoded_jwt = jwt.encode(
+        to_encode,
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
     return encoded_jwt
 
 
 def verify_token(token: str, credentials_exception):
+    """
+    Верифікація JWT токена.
+    Перевіряємо:
+    - підпис (secret + algorithm)
+    - exp (автоматично через jwt.decode)
+    - iss == 'blackbears-backend'
+    - aud == 'blackbears-frontend'
+    """
     try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+            audience="blackbears-frontend",
+        )
+
+        # Перевірка issuer
+        issuer = payload.get("iss")
+        if issuer != "blackbears-backend":
+            raise credentials_exception
+
         user_id: int = payload.get("sub")
         if user_id is None:
             raise credentials_exception
+
         token_data = TokenData(user_id=user_id)
     except JWTError:
         raise credentials_exception
