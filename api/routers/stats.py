@@ -87,7 +87,20 @@ async def get_player_stats(
         
         stats = stats_by_size[size]
         stats["tournaments_played"] += 1
-        stats["total_score"] += participation.total_score
+        
+        # For tournaments with finals, use finals_score for finalists, otherwise total_score
+        if tournament.with_finals and tournament.finals_started:
+            # Check if user was in finals
+            # If finals_score exists (even if 0), user was in finals - use finals_score
+            # Otherwise, use total_score (user didn't make it to finals)
+            if participation.finals_score is not None:
+                score_to_use = participation.finals_score
+            else:
+                score_to_use = participation.total_score
+        else:
+            score_to_use = participation.total_score
+        
+        stats["total_score"] += score_to_use or 0
         
         # Count exact positions
         if position == 1:
@@ -111,9 +124,29 @@ async def get_player_stats(
     # Game stats (new)
     game_positions = []
     for game_result in game_results:
-        positions = json.loads(game_result.positions)
-        avg_position = sum(positions) / len(positions)
-        game_positions.append(avg_position)
+        if not game_result.positions:
+            continue
+        
+        try:
+            # Try to parse as JSON string first
+            if isinstance(game_result.positions, str):
+                positions = json.loads(game_result.positions)
+            else:
+                # Already a list/dict (JSONB)
+                positions = game_result.positions
+            
+            # Ensure positions is a list
+            if not isinstance(positions, list):
+                continue
+            
+            if len(positions) == 0:
+                continue
+                
+            avg_position = sum(positions) / len(positions)
+            game_positions.append(avg_position)
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            # Skip invalid positions
+            continue
     
     total_tournaments = len(finished_participations)
     total_games = len(game_results)
@@ -134,7 +167,10 @@ async def get_player_stats(
             "average_position": round(
                 sum(p.final_position for p in finished_participations) / total_tournaments, 2
             ) if total_tournaments > 0 else 0,
-            "total_score": sum(p.total_score for p in finished_participations)
+            "total_score": sum(
+                (p.finals_score if p.tournament.with_finals and p.tournament.finals_started and p.finals_score is not None else p.total_score) or 0
+                for p in finished_participations
+            )
         },
         "game_stats": {
             "total_games": total_games,
